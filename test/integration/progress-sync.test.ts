@@ -122,8 +122,9 @@ describe('① → ②', () => {
     expect(r.s).toBe(200);
     expect(r.j.project.currentStepId).toBe('cs3');
     expect(r.j.milestones['Chấp thuận chủ trương'].nnActual).toBe('');
-    // HXL CQNN của bước tiếp theo = ngày đóng + số ngày xử lý (7)
-    expect(r.j.project.milestones.cs3.agency).toBe('2026-03-08');
+    // cs3 đã có HXL CQNN nhập lúc khởi tạo (10/03): giữ nguyên, không bị tính lại theo ngày đóng + 7
+    expect(r.j.project.milestones.cs3.agency).toBe('2026-03-10');
+    expect(r.j.project.milestones.cs3.agencyAuto).toBeUndefined();
   });
   it('PS-06: CĐT nhập ngày nộp ở bước (①) → mốc có TT CĐT', async () => {
     const r = await step({ stepId: 'cs3', side: 'cdt', date: '02/03/2026', note: 'Nộp hồ sơ thẩm định' }, T.cdt);
@@ -252,5 +253,69 @@ describe('Đợt 2: Cập nhật kế hoạch dự án theo danh mục mốc', (
     const own = await call(T.admin, 'PUT', '/api/metadata/projectStages', without('HTKT/ĐTM'));
     expect(own.s).toBe(409);
     expect(own.e).toMatch(/đã có tiến độ/);
+  });
+});
+
+describe('Nhánh rẽ: cơ quan của mốc là cơ quan ở "Bước tiếp theo" đã chọn', () => {
+  it('PS-22: đóng QH chọn nhánh Sở NNMT (cs61) → bước hiện tại, cơ quan của mốc QĐ Giao đất = Sở NNMT; Sở NNMT nhập nhanh được, phường không', async () => {
+    const created = await call(T.admin, 'POST', '/api/projects', {
+      code: 'PS-02', name: 'Dự án nhánh rẽ', investor: LT, location: 'Phường Bình Đông',
+      projectCategory: 'Khác', processId: 'p1', startDate: '01/01/2026', endDate: '31/12/2028'
+    });
+    const id = created.j.id;
+    const st = (b: any) => call(T.admin, 'POST', `/api/projects/${id}/progress/step`, b);
+    for (const [s, n, d] of [['cs1', 'cs3', '01/02/2026'], ['cs3', 'cs2', '02/02/2026'], ['cs2', 'cs4', '03/02/2026'], ['cs4', 'cs5', '04/02/2026'], ['cs5', 'cs61', '05/02/2026']]) {
+      expect((await st({ stepId: s, side: 'nn', status: 'Hoàn thành', date: d, nextStepIds: [n] })).s).toBe(200);
+    }
+    const d = await data();
+    expect(d.projects.find((p: any) => p.id === id).currentStepId).toBe('cs61');
+    expect(d.milestoneProgress[id]['QĐ Giao đất']).toMatchObject({ currentStepId: 'cs61', agency: 'Sở NNMT' });
+    const body = { changes: [{ milestone: 'QĐ Giao đất', side: 'nn', date: '06/02/2026' }] };
+    expect((await call(T.phuong, 'POST', `/api/projects/${id}/progress/milestone`, body)).s).toBe(403);
+    const r = await call(T.snnmt, 'POST', `/api/projects/${id}/progress/milestone`, body);
+    expect(r.s).toBe(200);
+    expect(r.j.milestones['QĐ Giao đất'].nnActual).toBe('2026-02-06');
+  });
+});
+
+describe('Kiểm tra dữ liệu khi cập nhật tiến độ / kế hoạch', () => {
+  let id = '';
+  const st = (b: any, t = T.admin) => call(t, 'POST', `/api/projects/${id}/progress/step`, b);
+  const qk = (changes: any[], t = T.admin) => call(t, 'POST', `/api/projects/${id}/progress/milestone`, { changes });
+  const putPlans = async (milestonePlans: any, t = T.admin) => {
+    const p = (await data()).projects.find((x: any) => x.id === id);
+    const { files, ...body } = p;
+    return call(t, 'PUT', `/api/projects/${id}`, { ...body, milestonePlans });
+  };
+  beforeAll(async () => {
+    id = (await call(T.admin, 'POST', '/api/projects', {
+      code: 'PS-03', name: 'Dự án kiểm tra dữ liệu', investor: LT, location: 'Phường Bình Đông',
+      projectCategory: 'Khác', processId: 'p1', startDate: '01/01/2026', endDate: '31/12/2028'
+    })).j.id;
+  });
+
+  it('PS-23: bước tiếp theo là chính nó → 400; ghi chú quá 2000 ký tự → 400', async () => {
+    expect((await st({ stepId: 'cs1', side: 'nn', status: 'Hoàn thành', date: '01/03/2026', nextStepIds: ['cs1'] })).s).toBe(400);
+    const r = await st({ stepId: 'cs1', side: 'nn', status: 'Đang xử lý', date: '01/12/2026', note: 'x'.repeat(2001) });
+    expect(r.s).toBe(400);
+    expect(r.e).toMatch(/2000/);
+  });
+  it('PS-24: bước nhận hồ sơ không được hoàn thành trước ngày bước trước chuyển sang', async () => {
+    expect((await st({ stepId: 'cs1', side: 'nn', status: 'Hoàn thành', date: '01/03/2026', nextStepIds: ['cs3'] })).s).toBe(200);
+    const r = await st({ stepId: 'cs3', side: 'nn', status: 'Hoàn thành', date: '28/02/2026', nextStepIds: ['cs2'] });
+    expect(r.s).toBe(400);
+    expect(r.e).toMatch(/bước trước/);
+  });
+  it('PS-25: nhập nhanh TT CQNN trước ngày một bước đã đóng ở ① → 400; sau đó → 200', async () => {
+    expect((await qk([{ milestone: 'Chấp thuận chủ trương', side: 'nn', date: '15/02/2026' }])).s).toBe(400);
+    expect((await qk([{ milestone: 'Chấp thuận chủ trương', side: 'nn', date: '10/03/2026' }])).s).toBe(200);
+  });
+  it('PS-26: Chỉnh sửa mốc: mốc lạ / ngày sai / KH CQNN trước KH CĐT → 400; tài khoản không phải SXD → 403', async () => {
+    expect((await putPlans({ 'Mốc lạ': { cdt: '01/05/2026' } })).s).toBe(400);
+    expect((await putPlans({ PCCC: { cdt: '31/02/2026' } })).s).toBe(400);
+    expect((await putPlans({ PCCC: { cdt: '10/06/2026', nn: '01/06/2026' } })).s).toBe(400);
+    expect((await putPlans({ PCCC: { cdt: '01/06/2026', nn: '10/06/2026' } }, T.cdt)).s).toBe(403);
+    expect((await putPlans({ PCCC: { cdt: '01/06/2026', nn: '10/06/2026' } })).s).toBe(200);
+    expect(await (async () => (await data()).milestoneProgress[id].PCCC)()).toMatchObject({ cdtPlan: '2026-06-01', nnPlan: '2026-06-10' });
   });
 });

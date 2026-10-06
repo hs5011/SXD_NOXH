@@ -56,7 +56,7 @@ import {
   ProgressSide, ProjectStepProgress, ProgressAttachment,
   applyMilestoneInput, applyMilestonePlan, applyStepPlan, applyStepUpdate,
   catalogMilestones, DONE_STEP_STATUSES, isInvestorStep, isoToDisplay, legacyPhaseOf,
-  linkedProcedures, milestoneKey, procedureState, processSteps, skippedStepIds, toIsoDate
+  linkedProcedures, milestoneKey, milestoneMovedStepIds, procedureState, processSteps, skippedStepIds, toIsoDate
 } from "./src/lib/stepProgress";
 import { hashPassword, generatePolicyCompliantPassword } from "./src/lib/crypto";
 import { verifyPassword, hashNewPassword, needsRehash, passwordFingerprint } from "./server/passwords";
@@ -653,6 +653,33 @@ async function startServer() {
     return { process, progress: next };
   }
 
+  // "Chỉnh sửa mốc" (milestonePlans { name: { cdt, nn } }): the plan of the milestones is set by Sở Xây
+  // dựng; every name must be in the catalog, every value a date, "X" or empty, and the CQNN plan cannot
+  // come before the CĐT plan. Returns [status, message] when refused.
+  async function milestonePlansError(plans: any, u: any): Promise<[number, string] | null> {
+    if (plans === undefined || plans === null) return null;
+    if (typeof plans !== 'object' || Array.isArray(plans)) return [400, "Kế hoạch mốc không hợp lệ."];
+    const names = Object.keys(plans);
+    if (names.length === 0) return null;
+    if (!isSxdOrAdminUser(u)) return [403, "Chỉ Sở Xây dựng được cập nhật kế hoạch mốc của dự án."];
+    const catalog = catalogMilestones(await dbGetMetadata('projectStages'));
+    for (const name of names) {
+      if (!catalog.some(m => m.name === name)) return [400, `Mốc "${name}" không có trong danh mục mốc tiến độ.`];
+      const sent = plans[name] || {};
+      const iso: Record<string, string> = {};
+      for (const side of SIDES) {
+        const value = String(sent[side] ?? '').trim();
+        if (!value || value.toUpperCase() === 'X') continue;
+        iso[side] = toIsoDate(value);
+        if (!iso[side]) return [400, `Mốc "${name}": ngày kế hoạch ${sideLabel(side)} "${value}" không hợp lệ (định dạng dd/mm/yyyy).`];
+      }
+      if (iso.cdt && iso.nn && iso.nn < iso.cdt) {
+        return [400, `Mốc "${name}": kế hoạch CQNN (${isoToDisplay(iso.nn)}) không được trước kế hoạch CĐT (${isoToDisplay(iso.cdt)}).`];
+      }
+    }
+    return null;
+  }
+
   // Agency name without the department in brackets ("Sở Xây dựng (Phòng PTĐT)" → "Sở Xây dựng")
   const baseAgency = (name: any) => normalizeAgencyName(String(name ?? '').replace(/\s*\(.*\)\s*$/, ''));
 
@@ -684,7 +711,15 @@ async function startServer() {
     return last.steps.find(s => s.id === last.exitStepId) || last.steps[last.steps.length - 1] || null;
   }
 
-  const todayIso = () => toIsoDate(new Date().toLocaleDateString('en-GB'));
+  // "Today" in Việt Nam whatever the server's time zone (a UTC container would refuse today's date
+  // between 00:00 and 07:00)
+  const todayIso = () => toIsoDate(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh' }));
+  const NOTE_MAX_LENGTH = 2000;
+  const noteError = (note: any) => {
+    if (typeof note === 'string' && note.trim().length > NOTE_MAX_LENGTH) {
+      throw badRequest(`Nội dung / ghi chú tối đa ${NOTE_MAX_LENGTH} ký tự.`);
+    }
+  };
   const badRequest = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
   const forbidden = (message: string) => Object.assign(new Error(message), { statusCode: 403 });
 
@@ -757,9 +792,21 @@ async function startServer() {
           throw badRequest(`Ngày chủ đầu tư nộp (${isoToDisplay(date)}) không được sau ngày cơ quan hoàn thành bước (${isoToDisplay(nnDate)}).`);
         }
 
+        noteError(b.note);
+        // The file reaches this step when a step that handed it over closed: it cannot finish before that
+        if (closes && date) {
+          const handover = Object.entries(progress).find(([key, s]) =>
+            key !== step.id && s?.nn?.actualDate && s.nn.actualDate > date && (s.nn.nextStepIds || []).includes(step.id));
+          if (handover) {
+            const from = steps.find(s => s.id === handover[0])?.name || handover[0];
+            throw badRequest(`Ngày hoàn thành (${isoToDisplay(date)}) không được trước ngày bước trước [${from}] chuyển hồ sơ sang (${isoToDisplay(handover[1].nn!.actualDate!)}).`);
+          }
+        }
+
         const nextStepIds: string[] = closes && Array.isArray(b.nextStepIds) ? b.nextStepIds.map(String) : [];
         const unknown = nextStepIds.find(id => !steps.some(s => s.id === id));
         if (unknown) throw badRequest("Bước tiếp theo không thuộc quy trình của dự án.");
+        if (nextStepIds.includes(step.id)) throw badRequest("Bước tiếp theo không được là chính bước đang cập nhật.");
         if (closes && nextStepIds.length === 0) {
           const skipped = skippedStepIds(process, progress);
           const idx = steps.findIndex(s => s.id === step.id);
@@ -817,7 +864,21 @@ async function startServer() {
             ? "Chỉ chủ đầu tư của dự án (hoặc Sở Xây dựng) được nhập tiến độ của chủ đầu tư."
             : `Chỉ cơ quan đang xử lý thủ tục của mốc "${milestone.name}" (hoặc Sở Xây dựng) được nhập tiến độ cơ quan.`);
         }
+        noteError(c.note);
         p = materialize(milestone.name, p);
+        // The CQNN date closes the open steps (or moves the step that ended the procedure): it cannot come
+        // before a step of the procedure that stays closed as it is
+        if (side === 'nn' && date && linked) {
+          linkedProcedures(process, milestone.name).forEach((ps: any) => {
+            const st = procedureState(ps, p);
+            const moved = new Set(milestoneMovedStepIds(st, p));
+            const kept = st.steps.filter(s => !moved.has(s.id) && p[s.id]?.nn?.actualDate && p[s.id]!.nn!.actualDate! > date);
+            if (kept.length > 0) {
+              const last = kept.reduce((a, s) => (p[s.id]!.nn!.actualDate! > p[a.id]!.nn!.actualDate! ? s : a));
+              throw badRequest(`Mốc "${milestone.name}": ngày cơ quan hoàn thành (${isoToDisplay(date)}) không được trước ngày bước [${last.name}] đã hoàn thành (${isoToDisplay(p[last.id]!.nn!.actualDate!)}).`);
+            }
+          });
+        }
         p = applyMilestoneInput(process, p, {
           milestone: milestone.name, side, date, note: typeof c.note === 'string' ? c.note.trim() : undefined,
           attachments: cleanAttachments(c.attachments), user: actorName(user)
@@ -922,6 +983,10 @@ async function startServer() {
       const fieldError = projectNameError(body, false) || projectDateError(body, project);
       if (fieldError) {
         return res.status(400).json({ error: fieldError });
+      }
+      const planError = await milestonePlansError(body?.milestonePlans, u);
+      if (planError) {
+        return res.status(planError[0]).json({ error: planError[1] });
       }
       // The project's id comes from the URL only
       const { id: _bodyId, ...updateBody } = body;

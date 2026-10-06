@@ -218,3 +218,25 @@ describe('ProjectGanttDetail – modal nhập tiến độ', () => {
     expect(screen.getByDisplayValue('QĐ số 1')).toBeInTheDocument();
   });
 });
+
+describe('ProjectGanttDetail – xem TT khi chỉ có quyền xem, xóa ngày (sửa 06/10/2026)', () => {
+  it('cơ quan không có quyền nhập vẫn mở được ô TT để xem; không có nút Lưu, nút "Đóng"', () => {
+    renderDetail({ currentUser: SNNMT });
+    fireEvent.click(screen.getByText('20/03/2026'));
+    expect(screen.getByText('Mốc: Chấp thuận chủ trương')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('QĐ số 1')).toBeDisabled();
+    expect(screen.getByText('Lưu tiến độ').closest('button')).not.toBeVisible();
+    fireEvent.click(screen.getByText('Đóng'));
+    expect(screen.queryByText('Nhập tiến độ thực hiện')).not.toBeInTheDocument();
+  });
+  it('xóa ngày TT đã có → gửi ngày trống kèm ghi chú trống', async () => {
+    const { props } = renderDetail({ currentUser: ADMIN });
+    fireEvent.click(screen.getByText('20/03/2026'));
+    const inputs = screen.getAllByPlaceholderText('dd/mm/yyyy');
+    fireEvent.change(inputs[1], { target: { value: '' } });
+    fireEvent.click(screen.getByText('Lưu tiến độ'));
+    await waitFor(() => expect(props.onSubmitMilestone).toHaveBeenCalled());
+    const changes = (props.onSubmitMilestone as any).mock.calls[0][1];
+    expect(changes).toEqual([expect.objectContaining({ side: 'nn', date: '', note: '' })]);
+  });
+});

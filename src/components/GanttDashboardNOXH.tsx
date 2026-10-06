@@ -167,7 +167,8 @@ export default function GanttDashboardNOXH({
         const investorStatus = milestoneSideStatus(m, 'cdt', idx, activeIdx, today);
         const agencyStatus = milestoneSideStatus(m, 'nn', idx, activeIdx, today);
         details[m.name] = { investorDate: m.cdtPlan, investorStatus, agencyDate: m.nnPlan, agencyStatus };
-        if (idx <= activeIdx && (investorStatus === 'delayed' || agencyStatus === 'delayed')) hasDelayedStep = true;
+        // "KH của CQNN bị chậm tiến độ": the CQNN side only (the investor's side shows on its own bar)
+        if (idx <= activeIdx && agencyStatus === 'delayed') hasDelayedStep = true;
       });
 
       return {
@@ -180,7 +181,7 @@ export default function GanttDashboardNOXH({
         textProgress: p.progress_status_2026 || p.textProgress || 'Đang triển khai',
         milestoneDetails: details,
         status: hasDelayedStep ? 'Quá hạn' : 'Đang xử lý',
-        stage: p.stage || 'Chuẩn bị đầu tư',
+        stage: p.stage || projectStages?.[0] || 'Chuẩn bị đầu tư',
         currentStep: p.currentStep || list[activeIdx]?.name || ''
       };
     });
@@ -189,10 +190,15 @@ export default function GanttDashboardNOXH({
   }, [initialProjects, milestoneProgress, allMilestones]);
 
 
+  // Stage names compared without case / spacing differences ("Chuẩn bị đầu tư" = "CHUẨN BỊ ĐẦU TƯ"):
+  // a project with no stage yet is shown under the first stage instead of disappearing from every filter
+  const stageKey = (s: any) => String(s ?? '').normalize('NFC').replace(/\s+/g, ' ').trim().toUpperCase();
+  const inStage = (p: any) => stageFilter === 'Tất cả giai đoạn' || stageKey(p.stage) === stageKey(stageFilter);
+
   const filteredProjects = projects.filter(p => {
     const matchesSearch = textMatches(searchTerm, p.name, p.code, p.currentStep);
-    
-    const matchesStage = stageFilter === 'Tất cả giai đoạn' || p.stage === stageFilter;
+
+    const matchesStage = inStage(p);
     const matchesStatus = statusFilter === 'Tất cả' || 
                           (statusFilter === 'Đang xử lý' && p.status === 'Đang xử lý') ||
                           (statusFilter === 'Chậm tiến độ' && p.status === 'Quá hạn');
@@ -201,18 +207,14 @@ export default function GanttDashboardNOXH({
   });
 
   const projectsFilteredByStageOnly = React.useMemo(() => {
-    return projects.filter(p => {
-      return stageFilter === 'Tất cả giai đoạn' || p.stage === stageFilter;
-    });
+    return projects.filter(inStage);
   }, [projects, stageFilter]);
 
   const projectsFilteredByStageAndSearch = React.useMemo(() => {
     return projects.filter(p => {
       const matchesSearch = textMatches(searchTerm, p.name, p.code, p.currentStep);
       
-      const matchesStage = stageFilter === 'Tất cả giai đoạn' || p.stage === stageFilter;
-      
-      return matchesSearch && matchesStage;
+      return matchesSearch && inStage(p);
     });
   }, [projects, searchTerm, stageFilter]);
 
@@ -265,20 +267,22 @@ export default function GanttDashboardNOXH({
       'TẦNG CAO',
       'SỐ CĂN HỘ',
       'TIẾN ĐỘ TH THEO CT CTĐT (Từ - Đến)',
+      'KH / TT',
       ...visiblePhases.flatMap(phase => [phase.displayName.toUpperCase(), '']),
       'NGÀY HOÀN THÀNH'
     ];
 
     // Header Row 2
     const headerRow2 = [
-      '', '', '', '', '', '', '', '',
+      '', '', '', '', '', '', '', '', '',
       ...visiblePhases.flatMap(() => ['CĐT', 'CƠ QUAN NN']),
       ''
     ];
 
-    // Data Rows
-    const dataRows = filteredProjects.map((p, idx) => {
-      const row = [
+    // Two rows per project, as on screen: KH (plan) then TT (actual), dates dd/mm/yyyy
+    const exportDate = (v: string) => (v ? formatDisplayDate(v) : '--');
+    const dataRows = filteredProjects.flatMap((p, idx) => {
+      const info = [
         idx + 1,
         `${p.name}\n(${p.code})\n${p.status === 'Quá hạn' ? 'Quá hạn' : 'Đang xử lý'}`,
         p.location,
@@ -288,17 +292,15 @@ export default function GanttDashboardNOXH({
         p.units,
         `${toDisplayDate(p.startDate)} - ${toDisplayDate(p.endDate)}`,
       ];
-
+      const plan: any[] = [...info, 'KH'];
+      const actual: any[] = [...info.map(() => ''), 'TT'];
       visiblePhases.forEach(phase => {
-        const planCdt = getCdtDate(p, phase) || '--';
-        const planNn = getNnDate(p, phase) || '--';
-        row.push(planCdt);
-        row.push(planNn);
+        plan.push(exportDate(getCdtDate(p, phase)), exportDate(getNnDate(p, phase)));
+        actual.push(exportDate(getActualCdtDate(p, phase)), exportDate(getActualNnDate(p, phase)));
       });
-
-      row.push(formatDisplayDate(p.deadline));
-
-      return row;
+      plan.push(formatDisplayDate(p.deadline));
+      actual.push('');
+      return [plan, actual];
     });
 
     const aoaData = [headerRow1, headerRow2, ...dataRows];
@@ -314,15 +316,21 @@ export default function GanttDashboardNOXH({
       { s: { r: 0, c: 5 }, e: { r: 1, c: 5 } }, // Tầng cao
       { s: { r: 0, c: 6 }, e: { r: 1, c: 6 } }, // Số căn hộ
       { s: { r: 0, c: 7 }, e: { r: 1, c: 7 } }, // Tiến độ TH
+      { s: { r: 0, c: 8 }, e: { r: 1, c: 8 } }, // KH / TT
     ];
 
     visiblePhases.forEach((_, idx) => {
-      const colIdx = 8 + idx * 2;
+      const colIdx = 9 + idx * 2;
       merges.push({ s: { r: 0, c: colIdx }, e: { r: 0, c: colIdx + 1 } });
     });
 
-    const completionColIdx = 8 + visiblePhases.length * 2;
+    const completionColIdx = 9 + visiblePhases.length * 2;
     merges.push({ s: { r: 0, c: completionColIdx }, e: { r: 1, c: completionColIdx } }); // Ngày hoàn thành
+    // Project information over its KH and TT rows
+    filteredProjects.forEach((_, idx) => {
+      const r = 2 + idx * 2;
+      [0, 1, 2, 3, 4, 5, 6, 7, completionColIdx].forEach(c => merges.push({ s: { r, c }, e: { r: r + 1, c } }));
+    });
 
     worksheet['!merges'] = merges;
 
@@ -336,6 +344,7 @@ export default function GanttDashboardNOXH({
       { wch: 10 }, // Tầng cao
       { wch: 10 }, // Số căn hộ
       { wch: 20 }, // Tiến độ TH
+      { wch: 7 },  // KH / TT
     ];
 
     visiblePhases.forEach(() => {

@@ -440,6 +440,8 @@ async function bootstrapTables() {
         PRIMARY KEY (project_id, step_key, side)
       );
     `);
+    // plan_source = 'auto': plan_date computed when the previous step closed (may be recomputed / reset)
+    await pool.query(`ALTER TABLE project_progress ADD COLUMN IF NOT EXISTS plan_source VARCHAR(10);`);
 
     // 4. Create 9 distinct name-only category tables
     await pool.query(`CREATE TABLE IF NOT EXISTS db_investors (name TEXT PRIMARY KEY);`);
@@ -1964,6 +1966,7 @@ const PROGRESS_SIDES: ProgressSide[] = ['cdt', 'nn'];
 function progressRowToEntry(row: any): ProgressEntry {
   const entry: ProgressEntry = {};
   if (row.plan_date) entry.planDate = row.plan_date;
+  if (row.plan_date && row.plan_source === 'auto') entry.planSource = 'auto';
   if (row.actual_date) entry.actualDate = row.actual_date;
   if (row.expected_date) entry.expectedDate = row.expected_date;
   if (row.status) entry.status = row.status;
@@ -2021,17 +2024,18 @@ export async function dbSaveStepProgress(projectId: string, before: ProjectStepP
       for (const c of changes) {
         const e = c.entry;
         await client.query(`
-          INSERT INTO project_progress (project_id, step_key, side, plan_date, actual_date, expected_date, status, note, attachments, next_step_ids, source, updated_by, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamp, CURRENT_TIMESTAMP))
+          INSERT INTO project_progress (project_id, step_key, side, plan_date, actual_date, expected_date, status, note, attachments, next_step_ids, source, updated_by, updated_at, plan_source)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamp, CURRENT_TIMESTAMP), $14)
           ON CONFLICT (project_id, step_key, side) DO UPDATE SET
-            plan_date = EXCLUDED.plan_date, actual_date = EXCLUDED.actual_date, expected_date = EXCLUDED.expected_date,
+            plan_date = EXCLUDED.plan_date, plan_source = EXCLUDED.plan_source, actual_date = EXCLUDED.actual_date, expected_date = EXCLUDED.expected_date,
             status = EXCLUDED.status, note = EXCLUDED.note, attachments = EXCLUDED.attachments,
             next_step_ids = EXCLUDED.next_step_ids, source = EXCLUDED.source, updated_by = EXCLUDED.updated_by,
             updated_at = EXCLUDED.updated_at
         `, [
           projectId, c.key, c.side, e.planDate || null, e.actualDate || null, e.expectedDate || null,
           e.status || null, e.note || null, JSON.stringify(e.attachments || []),
-          e.nextStepIds ? JSON.stringify(e.nextStepIds) : null, e.source || null, e.updatedBy || null, e.updatedAt || null
+          e.nextStepIds ? JSON.stringify(e.nextStepIds) : null, e.source || null, e.updatedBy || null, e.updatedAt || null,
+          e.planDate && e.planSource === 'auto' ? 'auto' : null
         ]);
       }
       await client.query("COMMIT");
@@ -2054,9 +2058,11 @@ export async function dbSaveStepProgress(projectId: string, before: ProjectStepP
 // "Reset tiến độ thực tế": actual dates, statuses and notes are cleared, plans are kept
 export async function dbResetStepProgressActuals(): Promise<void> {
   if (isDbConnected && pool) {
+    // Plans computed from the actual dates (plan_source = 'auto') go with them; entered plans stay
     await pool.query(`
       UPDATE project_progress SET actual_date = NULL, expected_date = NULL, status = NULL, note = NULL,
-        attachments = '[]'::jsonb, next_step_ids = NULL, updated_at = CURRENT_TIMESTAMP
+        attachments = '[]'::jsonb, next_step_ids = NULL, updated_at = CURRENT_TIMESTAMP,
+        plan_date = CASE WHEN plan_source = 'auto' THEN NULL ELSE plan_date END, plan_source = NULL
     `);
     return;
   }
@@ -2065,7 +2071,7 @@ export async function dbResetStepProgressActuals(): Promise<void> {
     Object.keys(store[pid]).forEach(key => {
       PROGRESS_SIDES.forEach(side => {
         const e = store[pid][key][side];
-        if (e) store[pid][key][side] = e.planDate ? { planDate: e.planDate } : {};
+        if (e) store[pid][key][side] = e.planDate && e.planSource !== 'auto' ? { planDate: e.planDate } : {};
       });
     });
   });

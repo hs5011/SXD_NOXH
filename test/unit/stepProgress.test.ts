@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  applyMilestoneInput, applyMilestonePlan, applyStepUpdate, catalogMilestones, computeMilestone,
+  applyMilestoneInput, applyMilestonePlan, applyStepPlan, applyStepUpdate, catalogMilestones, computeMilestone, milestoneMovedStepIds,
   computeMilestones, procedureState, skippedStepIds, legacyStepViews, activeMilestoneIndex,
   milestoneSideStatus, milestoneKey, toIsoDate, legacyPhaseOf
 } from '../../src/lib/stepProgress';
@@ -142,6 +142,67 @@ describe('Kế hoạch theo mốc (Chỉnh sửa mốc)', () => {
     expect(p.cs2.nn!.planDate).toBe('2026-04-10');
     const m = computeMilestones(process, stages, p)['Chấp thuận chủ trương'];
     expect([m.cdtPlan, m.nnPlan]).toEqual(['2026-02-01', '2026-04-10']);
+  });
+});
+
+describe('Nhánh rẽ: bước đang xử lý của mốc là bước đã chọn ở "Bước tiếp theo"', () => {
+  // Chủ trương đóng ở cs2, chọn nhánh 01 đơn vị (cs41, UBND phường) chứ không phải bước đầu cs4 (SQHKT)
+  const p = close(close(close({}, 'cs1', '2026-02-01', ['cs3']), 'cs3', '2026-02-05', ['cs2']), 'cs2', '2026-02-10', ['cs41']);
+  it('mốc QH 1/500: bước hiện tại cs41, cơ quan UBND cấp xã, phường', () => {
+    const m = computeMilestones(process, stages, p)['QH 1/500'];
+    expect(m.currentStepId).toBe('cs41');
+    expect(m.agency).toBe('UBND cấp xã, phường');
+  });
+  it('bước đang có trạng thái xử lý đứng trước bước chỉ được chọn', () => {
+    const q = applyStepUpdate(process, p, { stepId: 'cs4', side: 'nn', status: 'Đang xử lý', date: '2026-03-01' });
+    expect(procedureState(process.parentSteps[1], q).openSteps[0].id).toBe('cs4');
+  });
+  it('không có bước được chọn / đang xử lý → theo thứ tự quy trình như cũ', () => {
+    expect(procedureState(process.parentSteps[1], {}).openSteps.map(s => s.id)).toEqual(['cs4', 'cs5', 'cs41', 'cs51']);
+  });
+});
+
+describe('Kế hoạch đã nhập không bị ngày thực tế kéo theo', () => {
+  it('bước tiếp theo chưa có HXL → tính = ngày đóng + số ngày xử lý (đánh dấu tự tính)', () => {
+    const p = close({}, 'cs1', '2026-03-01', ['cs3']);
+    expect(p.cs3.nn).toMatchObject({ planDate: '2026-03-08', planSource: 'auto' });
+    expect(legacyStepViews(process, p).milestones.cs3).toEqual({ agency: '2026-03-08', agencyAuto: true });
+  });
+  it('bước tiếp theo đã có HXL nhập tay → giữ nguyên', () => {
+    let p = applyMilestonePlan(process, {}, 'Chấp thuận chủ trương', 'nn', '2026-04-01');
+    p = close(p, 'cs3', '2026-03-01', ['cs2']);
+    expect(p.cs2.nn!.planDate).toBe('2026-04-01');
+    expect(p.cs2.nn!.planSource).toBeUndefined();
+  });
+  it('HXL tự tính được tính lại khi bước trước đóng lại ngày khác; nhập tay đè lên thì thành kế hoạch', () => {
+    let p = close({}, 'cs1', '2026-03-01', ['cs3']);
+    p = applyStepUpdate(process, p, { stepId: 'cs1', side: 'nn', status: 'Đang xử lý', date: '2026-03-05' });
+    p = close(p, 'cs1', '2026-03-10', ['cs3']);
+    expect(p.cs3.nn!.planDate).toBe('2026-03-17');
+    p = applyStepPlan(p, 'cs3', 'nn', '2026-03-30');
+    expect(p.cs3.nn!.planSource).toBeUndefined();
+    p = close(p, 'cs1', '2026-03-12', ['cs3']);
+    expect(p.cs3.nn!.planDate).toBe('2026-03-30');
+  });
+});
+
+describe('Nhập nhanh rồi mở lại / sửa ngày', () => {
+  const quick = (p: any, date: string) => applyMilestoneInput(process, p, { milestone: 'QH 1/500', side: 'nn', date });
+  it('nhập nhanh đóng mọi bước; mở lại 1 bước ở ① → thủ tục chưa xong, bước đó là bước đang xử lý', () => {
+    let p = quick({}, '2026-04-10');
+    expect(procedureState(process.parentSteps[1], p).done).toBe(true);
+    p = applyStepUpdate(process, p, { stepId: 'cs5', side: 'nn', status: 'Đang xử lý', date: '2026-05-01' });
+    const st = procedureState(process.parentSteps[1], p);
+    expect(st.done).toBe(false);
+    expect(st.openSteps[0].id).toBe('cs5');
+    expect(computeMilestones(process, stages, p)['QH 1/500'].nnActual).toBe('');
+  });
+  it('sửa ngày nhập nhanh → các bước cùng được nhập nhanh dời theo, bước đóng ở ① giữ ngày', () => {
+    let p = close({}, 'cs4', '2026-04-01', ['cs5']);
+    p = quick(p, '2026-04-10');
+    p = quick(p, '2026-04-08');
+    expect(['cs4', 'cs5', 'cs41', 'cs51'].map(id => p[id].nn!.actualDate)).toEqual(['2026-04-01', '2026-04-08', '2026-04-08', '2026-04-08']);
+    expect(milestoneMovedStepIds(procedureState(process.parentSteps[1], p), p).sort()).toEqual(['cs41', 'cs5', 'cs51']);
   });
 });
 

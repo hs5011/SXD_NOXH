@@ -12,7 +12,7 @@ import { isPlanDatePassed } from '../src/lib/phaseLogic.ts';
 import {
   ProjectStepProgress, MilestoneProgress, ProgressSide,
   applyMilestoneInput, applyMilestonePlan, catalogMilestones, computeMilestones,
-  isoToDisplay, legacyPhaseOf, legacyStepViews, legacyValuesFor, linkedProcedures, processSteps, toIsoDate
+  isoToDisplay, legacyPhaseOf, legacyStepViews, legacyValuesFor, linkedProcedures, orderOpenSteps, processSteps, toIsoDate
 } from '../src/lib/stepProgress.ts';
 
 export const findProcess = (meta: any, project: any) =>
@@ -62,7 +62,8 @@ export function stepStatusFields(process: any, progress: ProjectStepProgress) {
   const steps = flattenProcessSteps(process);
   if (!process || steps.length === 0) return null;
   const done = steps.filter(s => isStepCompleted(s.id, views.milestones, views.implementationPlan)).length;
-  const active = findActiveSteps(steps, views.milestones, views.implementationPlan);
+  // The step chosen as "Bước tiếp theo" comes before steps that only have a plan (branch not taken)
+  const active = orderOpenSteps(findActiveSteps(steps, views.milestones, views.implementationPlan), progress);
   let status = 'On Track';
   active.forEach(s => {
     const m = views.milestones[s.id] || {};

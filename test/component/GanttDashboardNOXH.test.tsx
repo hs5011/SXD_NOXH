@@ -582,3 +582,49 @@ describe('GanttDashboardNOXH – actualProgress từ props', () => {
     expect(doneBadges.length).toBeGreaterThan(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+describe('GanttDashboardNOXH – Thẻ chậm tiến độ, lọc giai đoạn, xuất Excel (sửa 06/10/2026)', () => {
+  beforeEach(() => { localStorage.clear(); });
+  const base = { ...mockProject1, chutruong_cdt_date: '', chutruong_nn_date: '' };
+  // Chấp thuận chủ trương: CQNN đã xong; CĐT có KH đã qua nhưng chưa nhập TT
+  const cdtLate = { ...base, id: 'p-cdt', code: 'CDT-LATE', name: 'Dự án chỉ chậm phía CĐT' };
+  const mp = (legacy: any) => computeMilestones(null, STAGES_RAW, {}, m => (m.name === 'Chấp thuận chủ trương' ? legacy : {}));
+  const lateCard = () => screen.getByText('KH của CQNN bị chậm tiến độ').closest('div[class]')!;
+
+  it('chậm phía CĐT không tính vào "KH của CQNN bị chậm tiến độ"', () => {
+    renderGantt({ projects: [cdtLate], milestoneProgress: { 'p-cdt': mp({ cdtPlan: '01/01/2025', nnActual: '2025-02-01' }) } });
+    fireEvent.click(lateCard());
+    expect(screen.queryByText('Dự án chỉ chậm phía CĐT')).toBeNull();
+  });
+
+  it('chậm phía CQNN vẫn được tính', () => {
+    const nnLate = { ...base, id: 'p-nn', code: 'NN-LATE', name: 'Dự án chậm phía CQNN' };
+    renderGantt({ projects: [nnLate], milestoneProgress: { 'p-nn': mp({ nnPlan: '01/01/2025' }) } });
+    fireEvent.click(lateCard());
+    expect(screen.getByText('Dự án chậm phía CQNN')).toBeInTheDocument();
+  });
+
+  it('lọc giai đoạn không phân biệt hoa thường; dự án chưa có giai đoạn nằm ở giai đoạn đầu', () => {
+    const noStage = { ...base, id: 'p-ns', code: 'NS', name: 'Dự án chưa có giai đoạn', stage: '' };
+    const lower = { ...base, id: 'p-lo', code: 'LO', name: 'Dự án giai đoạn chữ thường', stage: 'Thực hiện đầu tư' };
+    renderGantt({ projects: [noStage, lower] });
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'CHUẨN BỊ ĐẦU TƯ' } });
+    expect(screen.getByText('Dự án chưa có giai đoạn')).toBeInTheDocument();
+    expect(screen.queryByText('Dự án giai đoạn chữ thường')).toBeNull();
+    fireEvent.change(select, { target: { value: 'THỰC HIỆN ĐẦU TƯ' } });
+    expect(screen.getByText('Dự án giai đoạn chữ thường')).toBeInTheDocument();
+  });
+
+  it('xuất Excel: mỗi dự án 2 dòng KH / TT, ngày dd/mm/yyyy', async () => {
+    const XLSX: any = await import('xlsx');
+    XLSX.utils.aoa_to_sheet.mockClear();
+    renderGantt({ projects: [cdtLate], milestoneProgress: { 'p-cdt': mp({ cdtPlan: '01/01/2025', nnActual: '2025-02-01' }) } });
+    fireEvent.click(screen.getByText('Xuất dữ liệu dự án'));
+    const rows = XLSX.utils.aoa_to_sheet.mock.calls[0][0];
+    expect(rows).toHaveLength(4);
+    expect(rows[2].slice(8, 11)).toEqual(['KH', '01/01/2025', '--']);
+    expect(rows[3].slice(8, 11)).toEqual(['TT', '--', '01/02/2025']);
+  });
+});

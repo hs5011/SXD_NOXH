@@ -159,7 +159,8 @@ const CREATE_PROGRESS_TABLE = `
     updated_by TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (project_id, step_key, side)
-  );`;
+  );
+  ALTER TABLE project_progress ADD COLUMN IF NOT EXISTS plan_source VARCHAR(10);`;
 
 async function writeRows(client: pg.PoolClient, r: ProjectMigration) {
   for (const [key, sides] of Object.entries(r.after)) {

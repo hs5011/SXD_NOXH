@@ -168,13 +168,14 @@ export default function MilestoneGanttBoard({
       if (canEditCdt) {
         const atts = [...cdtAtts, ...(await upload(cdtFiles))];
         if (cdtDate !== (editing.cdtActual || '') || cdtNote !== (editing.cdtNote || '') || !sameList(atts, editing.cdtAttachments || [])) {
-          changes.push({ milestone: editing.name, side: 'cdt', date: cdtDate, note: cdtNote, attachments: atts });
+          // Clearing a recorded date clears the note that went with it; attached files stay in the project's files
+          changes.push({ milestone: editing.name, side: 'cdt', date: cdtDate, note: editing.cdtActual && !cdtDate ? '' : cdtNote, attachments: atts });
         }
       }
       if (canEditNn(editing)) {
         const atts = [...nnAtts, ...(await upload(nnFiles))];
         if (nnDate !== (editing.nnActual || '') || nnNote !== (editing.nnNote || '') || !sameList(atts, editing.nnAttachments || [])) {
-          changes.push({ milestone: editing.name, side: 'nn', date: nnDate, note: nnNote, attachments: atts });
+          changes.push({ milestone: editing.name, side: 'nn', date: nnDate, note: editing.nnActual && !nnDate ? '' : nnNote, attachments: atts });
         }
       }
       if (failures.length > 0) alert(describeUploadFailures(failures));
@@ -310,6 +311,7 @@ export default function MilestoneGanttBoard({
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
+            maxLength={2000}
             rows={2}
             disabled={!editable}
             placeholder="Nhập nội dung hoặc ghi chú..."
@@ -403,8 +405,8 @@ export default function MilestoneGanttBoard({
                   {shown.map(m => (
                     <td key={m.name} className="border-r border-b border-slate-100 p-1 relative bg-[#F8FAFC] h-12">
                       {m.cdtActual ? (
-                        <div onClick={() => canOpen(m) && openModal(m)} title="Xem / sửa tiến độ"
-                          className={`absolute inset-y-2 left-1 right-1 ${isLate(m.cdtPlan, m.cdtActual) ? 'bg-rose-500' : 'bg-blue-600'} rounded-lg flex items-center justify-center text-[10px] font-black text-white shadow-md ${canOpen(m) ? 'cursor-pointer hover:opacity-90' : ''}`}>
+                        <div onClick={() => openModal(m)} title={canOpen(m) ? 'Xem / sửa tiến độ' : 'Xem tiến độ'}
+                          className={`absolute inset-y-2 left-1 right-1 ${isLate(m.cdtPlan, m.cdtActual) ? 'bg-rose-500' : 'bg-blue-600'} rounded-lg flex items-center justify-center text-[10px] font-black text-white shadow-md cursor-pointer hover:opacity-90`}>
                           {formatDate(m.cdtActual)}
                         </div>
                       ) : offerInput(m, 'cdt') && (
@@ -442,8 +444,8 @@ export default function MilestoneGanttBoard({
                       {shown.map(m => (
                         <td key={m.name} className="border-r border-b border-slate-100 p-1 relative bg-[#F8FAFC] h-12">
                           {rowOf(m) === row && (m.nnActual ? (
-                            <div onClick={() => canOpen(m) && openModal(m)} title="Xem / sửa tiến độ"
-                              className={`absolute inset-y-2 left-1 right-1 ${isLate(m.nnPlan, m.nnActual) ? 'bg-rose-500' : 'bg-blue-600'} rounded-lg flex items-center justify-center text-[10px] font-black text-white shadow-md ${canOpen(m) ? 'cursor-pointer hover:opacity-90' : ''}`}>
+                            <div onClick={() => openModal(m)} title={canOpen(m) ? 'Xem / sửa tiến độ' : 'Xem tiến độ'}
+                              className={`absolute inset-y-2 left-1 right-1 ${isLate(m.nnPlan, m.nnActual) ? 'bg-rose-500' : 'bg-blue-600'} rounded-lg flex items-center justify-center text-[10px] font-black text-white shadow-md cursor-pointer hover:opacity-90`}>
                               {formatDate(m.nnActual)}
                             </div>
                           ) : offerInput(m, 'nn') && (
@@ -506,9 +508,9 @@ export default function MilestoneGanttBoard({
             </div>
             <div className="px-6 py-4 bg-slate-50/50 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
               <button onClick={() => setEditing(null)} disabled={saving} className="px-6 py-2.5 bg-white border border-slate-200 text-slate-600 text-sm font-black rounded-2xl hover:bg-slate-50 disabled:opacity-50">
-                Hủy
+                {canOpen(editing) ? 'Hủy' : 'Đóng'}
               </button>
-              <button onClick={save} disabled={saving || !(canEditCdt || canEditNn(editing))} className="px-6 py-2.5 bg-blue-600 text-white text-sm font-black rounded-2xl hover:bg-blue-700 shadow-lg shadow-blue-200 flex items-center gap-2 disabled:opacity-50">
+              <button onClick={save} hidden={!canOpen(editing)} disabled={saving || !canOpen(editing)} className="px-6 py-2.5 bg-blue-600 text-white text-sm font-black rounded-2xl hover:bg-blue-700 shadow-lg shadow-blue-200 flex items-center gap-2 disabled:opacity-50">
                 {saving ? <><Loader2 size={18} className="animate-spin" />Đang lưu...</> : <><Save size={18} />Lưu tiến độ</>}
               </button>
             </div>

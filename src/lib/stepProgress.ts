@@ -23,6 +23,7 @@ export interface ProgressAttachment {
 
 export interface ProgressEntry {
   planDate?: string;      // HXL kế hoạch, yyyy-MM-dd
+  planSource?: 'auto';    // planDate computed when the previous step closed (date + processing days)
   actualDate?: string;    // ngày thực tế (TT), yyyy-MM-dd
   expectedDate?: string;  // ngày hoàn thành dự kiến while the step is still open, yyyy-MM-dd
   status?: string;        // processing status of the step (nn side)
@@ -138,6 +139,26 @@ export interface ProcedureState {
 const nnOf = (progress: ProjectStepProgress, id: string) => progress?.[id]?.nn || {};
 const cdtOf = (progress: ProjectStepProgress, id: string) => progress?.[id]?.cdt || {};
 const isClosed = (progress: ProjectStepProgress, id: string) => !!nnOf(progress, id).actualDate;
+// Status of an open step meaning the file is being handled there
+const isWorkStatus = (status: string | undefined) => !!status && status !== 'Chưa bắt đầu' && !DONE_STEP_STATUSES.includes(status);
+
+// Steps a closed step handed the file to ("Bước tiếp theo"), anywhere in the process
+export const chosenNextStepIds = (progress: ProjectStepProgress): Set<string> => {
+  const ids = new Set<string>();
+  Object.entries(progress || {}).forEach(([key, sides]) => {
+    if (key.startsWith(MILESTONE_KEY_PREFIX) || !sides?.nn?.actualDate) return;
+    (sides.nn.nextStepIds || []).forEach(id => ids.add(String(id)));
+  });
+  return ids;
+};
+
+// Where the file is among open steps: a step being processed (has a status), then a step chosen as
+// "Bước tiếp theo", then the others in process order. A branch not chosen must not come first.
+export const orderOpenSteps = <T extends { id: string }>(open: T[], progress: ProjectStepProgress): T[] => {
+  const chosen = chosenNextStepIds(progress);
+  const rank = (s: T) => (isWorkStatus(nnOf(progress, s.id).status) ? 2 : chosen.has(s.id) ? 1 : 0);
+  return open.map((s, i) => ({ s, i })).sort((a, b) => rank(b.s) - rank(a.s) || a.i - b.i).map(x => x.s);
+};
 
 // A procedure may contain alternative branches (e.g. đất ≥2ha thuộc 01 / 02 đơn vị hành chính), so it
 // is NOT "every step done". It is done when a step is closed and every "Bước tiếp theo" chosen for it
@@ -154,7 +175,10 @@ export const procedureState = (ps: any, progress: ProjectStepProgress): Procedur
   const closers = [...exits];
   if (last && isClosed(progress, last.id) && !closers.includes(last)) closers.push(last);
   const allClosed = steps.length > 0 && steps.every(s => isClosed(progress, s.id));
-  const done = steps.length > 0 && (closers.length > 0 || allClosed);
+  // A step reopened with a processing status (e.g. after a quick input closed every step) means the file
+  // is still in the procedure
+  const reopened = steps.some(s => !isClosed(progress, s.id) && isWorkStatus(nnOf(progress, s.id).status));
+  const done = steps.length > 0 && !reopened && (closers.length > 0 || allClosed);
 
   let doneDate = '';
   let exitStepId = '';
@@ -169,7 +193,8 @@ export const procedureState = (ps: any, progress: ProjectStepProgress): Procedur
     const nn = nnOf(progress, s.id);
     return !!(nn.actualDate || nn.status || cdtOf(progress, s.id).actualDate);
   });
-  return { id: String(ps?.id ?? ''), steps, openSteps: steps.filter(s => !isClosed(progress, s.id)), done, doneDate, exitStepId, started };
+  const openSteps = orderOpenSteps(steps.filter(s => !isClosed(progress, s.id)), progress);
+  return { id: String(ps?.id ?? ''), steps, openSteps, done, doneDate, exitStepId, started };
 };
 
 // Open steps of finished procedures (the branch not taken): shown as "không áp dụng", not as pending work
@@ -321,7 +346,9 @@ export interface StepUpdate {
 }
 
 // ① Update of one step. Closing the step (Hoàn thành / Đã phê duyệt) records the actual date and the
-// chosen next steps, whose CQNN plan becomes date + their processing days. Any other status reopens the
+// chosen next steps, whose CQNN plan becomes date + their processing days — unless the step already has
+// a plan that was entered (Kế hoạch, Chỉnh sửa mốc, imported data): a plan is not moved by the actual
+// progress, otherwise a step finished ahead of its plan would show as late. Any other status reopens the
 // step: the date is the expected completion date.
 export const applyStepUpdate = (process: any, progress: ProjectStepProgress, u: StepUpdate): ProjectStepProgress => {
   const p = clone(progress);
@@ -355,7 +382,8 @@ export const applyStepUpdate = (process: any, progress: ProjectStepProgress, u: 
       d.setDate(d.getDate() + (step.slaDays || 0));
       const planDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       const nn = p[id]?.nn || {};
-      setEntry(p, id, 'nn', stamp({ ...nn, planDate }, u.user));
+      if (nn.planDate && nn.planSource !== 'auto') return;
+      setEntry(p, id, 'nn', stamp({ ...nn, planDate, planSource: 'auto' }, u.user));
     });
   }
   return p;
@@ -369,6 +397,17 @@ export interface MilestoneInput {
   attachments?: ProgressAttachment[];
   user?: string;
 }
+
+// Steps a new CQNN date of a finished procedure moves: the step that ended it, and the steps a quick input
+// closed together with it (same date); steps closed on the step screen keep their date
+export const milestoneMovedStepIds = (st: ProcedureState, progress: ProjectStepProgress): string[] => {
+  const target = st.exitStepId || st.steps[st.steps.length - 1]?.id;
+  if (!st.done || !target) return [];
+  const date = progress?.[target]?.nn?.actualDate;
+  const together = st.steps.filter(s => s.id !== target && progress?.[s.id]?.nn?.source === 'milestone'
+    && !!date && progress[s.id]!.nn!.actualDate === date).map(s => s.id);
+  return [target, ...together];
+};
 
 // ② Date entered on a milestone, written onto the steps of the linked procedures:
 //   cdt → first step of the procedure (CĐT nộp hồ sơ)
@@ -421,10 +460,12 @@ export const applyMilestoneInput = (process: any, progress: ProjectStepProgress,
     if (st.done) {
       const target = st.exitStepId || lastStep?.id;
       if (!target) return;
-      const nn = p[target]?.nn || {};
-      setEntry(p, target, 'nn', stamp({
-        ...nn, actualDate: date, note: input.note ?? nn.note, attachments: input.attachments ?? nn.attachments
-      }, input.user));
+      milestoneMovedStepIds(st, p).forEach(id => {
+        const nn = p[id]?.nn || {};
+        setEntry(p, id, 'nn', stamp(id === target
+          ? { ...nn, actualDate: date, note: input.note ?? nn.note, attachments: input.attachments ?? nn.attachments }
+          : { ...nn, actualDate: date }, input.user));
+      });
       return;
     }
     st.openSteps.forEach(s => {
@@ -468,7 +509,7 @@ export const applyMilestonePlan = (
   }
   if (!key) return p;
   const prev = p[key]?.[side] || {};
-  setEntry(p, key, side, stamp({ ...prev, planDate: iso || undefined }, user));
+  setEntry(p, key, side, stamp({ ...prev, planDate: iso || undefined, planSource: undefined }, user));
   return p;
 };
 
@@ -477,7 +518,7 @@ export const applyStepPlan = (
 ): ProjectStepProgress => {
   const p = clone(progress);
   const prev = p[stepId]?.[side] || {};
-  setEntry(p, stepId, side, stamp({ ...prev, planDate: toIsoDate(planDate) || undefined }, user));
+  setEntry(p, stepId, side, stamp({ ...prev, planDate: toIsoDate(planDate) || undefined, planSource: undefined }, user));
   return p;
 };
 
@@ -493,7 +534,12 @@ export const legacyStepViews = (process: any, progress: ProjectStepProgress) => 
     const c = sides?.cdt || {};
     const n = sides?.nn || {};
     if (c.planDate || n.planDate) {
-      milestones[key] = { ...(c.planDate ? { investor: c.planDate } : {}), ...(n.planDate ? { agency: n.planDate } : {}) };
+      milestones[key] = {
+        ...(c.planDate ? { investor: c.planDate } : {}),
+        ...(n.planDate ? { agency: n.planDate } : {}),
+        // computed from the previous step's closing date: the next closing may recompute it
+        ...(n.planDate && n.planSource === 'auto' ? { agencyAuto: true } : {})
+      };
     }
     const ip: any = {};
     if (n.actualDate) ip.agencyActualDate = n.actualDate;

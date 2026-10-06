@@ -786,3 +786,36 @@ describe('HousingUpdateView – Project với milestones và implementationPlan'
     expect(screen.queryAllByText('Đang xử lý').length).toBeGreaterThan(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+describe('HousingUpdateView – HXL của bước không chép ngày của mốc sang mọi bước', () => {
+  beforeEach(() => { mockFetch(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const giaoDat = {
+    id: 'pg', name: 'Giao đất, cho thuê đất', stage: 'Chuẩn bị', milestoneName: 'QĐ Giao đất',
+    childSteps: [
+      { id: 'g1', name: 'Thẩm định (toàn bộ)', agency: 'UBND cấp xã, phường' },
+      { id: 'g2', name: 'Phê duyệt (toàn bộ)', agency: 'UBND cấp xã, phường' },
+      { id: 'g3', name: 'Thẩm định (20%)', agency: 'Sở NNMT' },
+      { id: 'g4', name: 'Phê duyệt (20%)', agency: 'UBND TP' },
+    ],
+  };
+  const proc = { id: 'proc-g', name: 'Quy trình thử', parentSteps: [giaoDat] };
+  const base = { ...mockProject, processId: 'proc-g', qdgiaodat_cdt_date: '01/02/2026', qdgiaodat_nn_date: '15/02/2026' };
+
+  it('chưa bước nào có HXL: KH của mốc chỉ hiện ở bước đầu (CĐT) và bước cuối (CQNN)', async () => {
+    await act(async () => { renderHousing({ project: base, processes: [proc] }); });
+    // CQNN: chỉ dòng bước cuối (bước đang chọn là bước đầu nên ô HXL đầu trang không có)
+    expect(screen.getAllByText('15/02/2026')).toHaveLength(1);
+    // CĐT: dòng bước đầu + ô HXL đầu trang (bước đầu đang được chọn)
+    expect(screen.getAllByText('01/02/2026')).toHaveLength(2);
+  });
+
+  it('có bước đã có HXL riêng: chỉ bước đó hiện ngày, không lấy ngày của mốc', async () => {
+    const project = { ...base, milestones: { g3: { agency: '2026-02-10' } } };
+    await act(async () => { renderHousing({ project, processes: [proc] }); });
+    expect(screen.getAllByText('10/02/2026')).toHaveLength(1);
+    expect(screen.queryByText('15/02/2026')).toBeNull();
+  });
+});

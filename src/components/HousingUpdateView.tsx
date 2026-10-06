@@ -16,6 +16,7 @@ import { parseDate, formatLocalDate, getAgencyWithDepartment, toDisplayDate, toD
 registerLocale('vi', vi);
 
 import { isStepCompleted, normalizeAgencyName } from '../lib/stepAgency';
+import { legacyPhaseOf } from '../lib/stepProgress';
 import { apiFetch, uploadProjectFile, describeUploadFailures, downloadAttachment, isStoredAttachmentId } from '../utils/apiFetch';
 import { checkUploadFiles, normalizeUploadConfig, uploadExtensionsLabel, uploadAcceptAttr } from '../lib/uploadRules';
 
@@ -420,6 +421,23 @@ export default function HousingUpdateView({
   const activeStep = steps.find(s => s.id === activeStepId) || steps[0];
   const activeSubStep = activeStep?.childSteps?.find(cs => cs.id === activeSubStepId) || activeStep?.childSteps?.[0];
 
+  // HXL of a step. A step without its own date shows the milestone plan kept in the former columns only
+  // when no step of its procedure has one, and only on the step the server writes that plan to (CĐT →
+  // first step, CQNN → last step): copied onto every step it looked like each step had that deadline.
+  const stepPlanDate = (parent: any, child: any, side: 'cdt' | 'nn'): string => {
+    const field = side === 'cdt' ? 'investor' : 'agency';
+    const own = project.milestones?.[child?.id]?.[field];
+    if (own) return own;
+    const children: any[] = parent?.childSteps || [];
+    if (children.some(c => project.milestones?.[c.id]?.[field])) return '';
+    const anchor = side === 'cdt' ? children[0] : children[children.length - 1];
+    if (!anchor || anchor.id !== child?.id) return '';
+    const linked = parent?.milestoneName;
+    const phase = linked ? legacyPhaseOf(linked) : undefined;
+    const key = linked ? (phase ? `${phase.planKey}_${side}_date` : null) : getStepDateKey(child.name, parent?.name || '', side === 'cdt');
+    return (key && project[key]) || '';
+  };
+
   // Get all sub-steps for the "Next Step" select
   const allSubSteps = steps.flatMap(s => s.childSteps || []);
 
@@ -579,7 +597,10 @@ export default function HousingUpdateView({
     }
     setIsSavingCdt(true);
     try {
-      const updated = await onSubmitStep(project.id, { stepId: activeSubStepId, side: 'cdt', date: cdtDate, note: cdtNote });
+      // Clearing a submission date that was recorded clears its note too
+      const hadDate = !!project.implementationPlan?.[activeSubStepId]?.investorActualDate;
+      const note = hadDate && !cdtDate ? '' : cdtNote;
+      const updated = await onSubmitStep(project.id, { stepId: activeSubStepId, side: 'cdt', date: cdtDate, note });
       if (updated) {
         setProject(updated);
         const ip = updated.implementationPlan?.[activeSubStepId] || {};
@@ -673,27 +694,13 @@ export default function HousingUpdateView({
             <div className="flex items-center justify-between text-xs sm:text-sm gap-4">
               <span className="text-slate-500 font-bold uppercase tracking-wider">CQNN</span>
               <span className="font-bold text-slate-800">
-                {(() => {
-                  let date = project.milestones?.[activeSubStep?.id || '']?.agency;
-                  if (!date) {
-                    const key = getStepDateKey(activeSubStep?.name || "", activeStep?.name || "", false);
-                    if (key && project[key]) date = project[key];
-                  }
-                  return formatDate(date) || '—';
-                })()}
+                {formatDate(stepPlanDate(activeStep, activeSubStep, 'nn')) || '—'}
               </span>
             </div>
             <div className="flex items-center justify-between text-xs sm:text-sm gap-4">
               <span className="text-slate-500 font-bold uppercase tracking-wider">CĐT</span>
               <span className="font-bold text-rose-700">
-                {(() => {
-                  let date = project.milestones?.[activeSubStep?.id || '']?.investor;
-                  if (!date) {
-                    const key = getStepDateKey(activeSubStep?.name || "", activeStep?.name || "", true);
-                    if (key && project[key]) date = project[key];
-                  }
-                  return formatDate(date) || '—';
-                })()}
+                {formatDate(stepPlanDate(activeStep, activeSubStep, 'cdt')) || '—'}
               </span>
             </div>
           </div>
@@ -742,6 +749,7 @@ export default function HousingUpdateView({
               placeholder="Nhập nội dung xử lý chi tiết... Ví dụ: Đã tiếp nhận hồ sơ, đang thẩm định tính pháp lý dự án, yêu cầu bổ sung giấy tờ..."
               value={processingContent}
               onChange={(e) => setProcessingContent(e.target.value)}
+              maxLength={2000}
             />
 
             <div className="p-3 bg-blue-50/50 rounded-lg border border-blue-100 flex items-center gap-2">
@@ -1049,10 +1057,19 @@ export default function HousingUpdateView({
                           <p className="text-sm font-semibold text-slate-800">{getAgencyWithDepartment(step.agency, step.department, step.name)}</p>
                         </div>
                         <div className="space-y-1 text-right">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">HXL dự kiến</p>
-                          <p className="text-sm font-bold text-slate-900">
-                            {addDays(completionDate, step.slaDays)}
-                          </p>
+                          {(() => {
+                            // An entered plan of the next step is kept (src/lib/stepProgress applyStepUpdate)
+                            const plan = project.milestones?.[id] as any;
+                            const kept = plan?.agency && !plan?.agencyAuto;
+                            return (
+                              <>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{kept ? 'HXL kế hoạch (giữ nguyên)' : 'HXL dự kiến'}</p>
+                                <p className="text-sm font-bold text-slate-900">
+                                  {kept ? formatDate(plan.agency) : addDays(completionDate, step.slaDays)}
+                                </p>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -1110,6 +1127,7 @@ export default function HousingUpdateView({
               <textarea
                 value={cdtNote}
                 onChange={(e) => setCdtNote(e.target.value)}
+                maxLength={2000}
                 disabled={!canEditCdt}
                 rows={2}
                 placeholder="Ví dụ: Đã nộp hồ sơ đề nghị thẩm định, số văn bản..."
@@ -1208,14 +1226,7 @@ export default function HousingUpdateView({
                         </td>
                         <td className="px-2.5 py-2 text-center">
                           <span className="text-sm font-semibold text-blue-600 font-sans">
-                            {(() => {
-                              let date = project.milestones?.[child.id]?.agency;
-                              if (!date) {
-                                const key = getStepDateKey(child.name, activeStep?.name || "", false);
-                                if (key && project[key]) date = project[key];
-                              }
-                              return formatDate(date) || '—';
-                            })()}
+                            {formatDate(stepPlanDate(activeStep, child, 'nn')) || '—'}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-center">
@@ -1240,14 +1251,7 @@ export default function HousingUpdateView({
                         </td>
                         <td className="px-3 py-2.5 text-center">
                           <span className="text-sm font-semibold text-slate-800 font-sans">
-                            {(() => {
-                              let date = project.milestones?.[child.id]?.investor;
-                              if (!date) {
-                                const key = getStepDateKey(child.name, activeStep?.name || "", true);
-                                if (key && project[key]) date = project[key];
-                              }
-                              return formatDate(date) || '—';
-                            })()}
+                            {formatDate(stepPlanDate(activeStep, child, 'cdt')) || '—'}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-center">
