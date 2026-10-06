@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Hệ thống Quản lý NOXH TP.HCM",
+  "description": "Hệ thống quản lý và theo dõi tiến độ các dự án Nhà ở xã hội cho Sở Xây dựng TP.HCM",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

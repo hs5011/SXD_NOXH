@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+playwright-report
+deploy_packages
+.env
+.deploy.env
+*.log
+NOXH_new
+uploads/*
+!uploads/.gitkeep

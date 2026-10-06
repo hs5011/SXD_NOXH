@@ -1,0 +1,47 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "dev-3001",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PORT=3001&& npm run dev"],
+      "port": 3001
+    },
+    {
+      "name": "qa-memory-3002",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set DATABASE_URL=MY_DATABASE_URL&& set SEED_USER_PASSWORD=QaLocalTest2026&& set NODE_ENV=development&& set PORT=3002&& npx tsx server.ts"],
+      "port": 3002
+    },
+    {
+      "name": "dist-realdb-3004",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set NODE_ENV=production&& set PORT=3004&& node dist/server.cjs"],
+      "port": 3004
+    },
+    {
+      "name": "dist-memory-3005",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set DATABASE_URL=MY_DATABASE_URL&& set SEED_USER_PASSWORD=QaLocalTest2026&& set NODE_ENV=production&& set PORT=3005&& node dist/server.cjs"],
+      "port": 3005
+    },
+    {
+      "name": "e2e-memory-3006",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set DATABASE_URL=MY_DATABASE_URL&& set SEED_USER_PASSWORD=123456&& set NODE_ENV=production&& set PORT=3006&& node dist/server.cjs"],
+      "port": 3006
+    },
+    {
+      "name": "qa-memory-prod-3003",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set DATABASE_URL=MY_DATABASE_URL&& set SEED_USER_PASSWORD=QaLocalTest2026&& set NODE_ENV=production&& set PORT=3003&& npx tsx server.ts"],
+      "port": 3003
+    }
+  ]
+}

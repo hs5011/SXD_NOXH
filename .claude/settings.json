@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\"; $job = Start-Job { Set-Location \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\"; npm run dev 2>&1 }; Start-Sleep 8; Receive-Job $job; Stop-Job $job; Remove-Job $job)",
+      "PowerShell(Invoke-WebRequest -Uri \"http://localhost:3000/api/health\" -TimeoutSec 5 | Select-Object StatusCode, @{N='Body';E={$_.Content}})",
+      "Bash(dir /s /b)",
+      "Read(//e/OneDrive - CONG TY CP CONG NGHE VIETINFO/Documents/**)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\" -Depth 2 | Where-Object {$_.PSIsContainer -or $_.Name -match '\\\\.\\(ts|js|json|tsx|jsx|md\\)$'} | Select-Object -First 80 FullName)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f'{k}: {v[\\\\\"lines\\\\\"][\\\\\"pct\\\\\"]}%'\\) for k,v in d.items\\(\\) if any\\(x in k for x in ['DashboardApp','ProjectGanttDetail','HousingUpdateView','UserManagement','AnnualProgress']\\)]\")",
+      "Bash(sort -t\"|\" -k2 -n)",
+      "Bash(npx vitest *)",
+      "Bash(xargs -I {} basename {})",
+      "Read(//tmp/**)",
+      "Bash(find \"e:/OneDrive - CONG TY CP CONG NGHE VIETINFO/Documents/Sở Xây Dựng/Phòng phát triển đô thị/demo/NOXH_new/src/components\" -maxdepth 1 -name \"*.tsx\" -type f | xargs -I {} basename {} | sort > /tmp/new_components.txt && cat /tmp/new_components.txt)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/api/health\" -TimeoutSec 3 -ErrorAction Stop; \"Server: $\\($r.StatusCode\\) - $\\($r.Content\\)\" } catch { \"Server OFFLINE: $_\" })",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/api/health)",
+      "Bash(npx playwright *)",
+      "Bash(curl -s \"http://localhost:3000/api/users\")",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\); const users=JSON.parse\\(d\\); console.log\\(JSON.stringify\\(users.map\\(u=>\\({id:u.id,username:u.username,roleId:u.roleId,userType:u.userType}\\)\\),null,2\\)\\)\")",
+      "PowerShell(Invoke-WebRequest -Uri \"http://localhost:3000\" -TimeoutSec 5 -UseBasicParsing)",
+      "PowerShell(Start-Process -FilePath \"cmd.exe\" -ArgumentList \"/c\", \"cd /d `\"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\S? X�y D?ng\\\\Ph�ng ph�t tri?n d� th?\\\\demo\\\\NOXH_ketnoiAPI`\" && npm run dev\" -WindowStyle Minimized)",
+      "PowerShell(Get-Process -Name \"node\" -ErrorAction SilentlyContinue)",
+      "PowerShell($file = \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\\\\test-final-output.txt\"; \\(Get-Item $file\\).Length; \\(Get-Item $file\\).LastWriteTime)",
+      "PowerShell($f = \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\\\\test-final-output.txt\"; \\(Get-Item $f\\).LastWriteTime; \\(Get-Item $f\\).Length)",
+      "PowerShell(Get-Date; $f = \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\\\\test-final-output.txt\"; \\(Get-Item $f\\).LastWriteTime; \\(Get-Item $f\\).Length; Get-Process -Name \"chrome\" -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt \\(Get-Date\\).AddHours\\(-1\\) } | Measure-Object | Select-Object Count)",
+      "Bash(dir /b \"e:\\\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\\\Documents\\\\Sở Xây Dựng\\\\Phòng phát triển đô thị\\\\demo\\\\NOXH_ketnoiAPI\")"
+    ],
+    "additionalDirectories": [
+      "e:\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\Documents\\S? X�y D?ng\\Ph�ng ph�t tri?n d� th?\\demo\\NOXH_ketnoiAPI\\test\\component",
+      "\\tmp",
+      "C:\\Users\\SonDH\\.claude\\projects\\e--OneDrive---CONG-TY-CP-CONG-NGHE-VIETINFO-Documents-S--X-y-D-ng-Ph-ng-ph-t-ري\\memory",
+      "e:\\OneDrive - CONG TY CP CONG NGHE VIETINFO\\Documents\\S? X�y D?ng\\Ph�ng ph�t tri?n d� th?\\demo\\NOXH_ketnoiAPI"
+    ]
+  }
+}

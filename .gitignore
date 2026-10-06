@@ -1,0 +1,28 @@
+node_modules/
+build/
+dist/
+dist-mobile/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+migration-report/
+
+# Deploy packages, backups and sync copies (not source)
+deploy_packages/
+_backups/
+.sync-backup/
+.sync-base/
+backup_projects_*.json
+scripts/backups/
+.deploy.env
+
+# Real uploaded files and test / report outputs
+uploads/
+test-results*/
+playwright-report/
+*.pptx
+
+# Local Claude Code settings
+.claude/settings.local.json
