@@ -306,6 +306,14 @@ describe('Kiểm tra dữ liệu khi cập nhật tiến độ / kế hoạch', 
     expect(r.s).toBe(400);
     expect(r.e).toMatch(/bước trước/);
   });
+  it('PS-24b: bước giao hồ sơ không được hoàn thành sau ngày bước nhận đã đóng', async () => {
+    expect((await st({ stepId: 'cs1', side: 'nn', status: 'Hoàn thành', date: '01/03/2026', nextStepIds: ['cs3'] })).s).toBe(200);
+    expect((await st({ stepId: 'cs3', side: 'nn', status: 'Hoàn thành', date: '05/03/2026', nextStepIds: ['cs2'] })).s).toBe(200);
+    const r = await st({ stepId: 'cs1', side: 'nn', status: 'Hoàn thành', date: '10/03/2026', nextStepIds: ['cs3'] });
+    expect(r.s).toBe(400);
+    expect(r.e).toMatch(/bước tiếp theo/);
+    expect((await st({ stepId: 'cs1', side: 'nn', status: 'Hoàn thành', date: '03/03/2026', nextStepIds: ['cs3'] })).s).toBe(200);
+  });
   it('PS-25: nhập nhanh TT CQNN trước ngày một bước đã đóng ở ① → 400; sau đó → 200', async () => {
     expect((await qk([{ milestone: 'Chấp thuận chủ trương', side: 'nn', date: '15/02/2026' }])).s).toBe(400);
     expect((await qk([{ milestone: 'Chấp thuận chủ trương', side: 'nn', date: '10/03/2026' }])).s).toBe(200);

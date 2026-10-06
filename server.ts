@@ -804,6 +804,15 @@ async function startServer() {
         }
 
         const nextStepIds: string[] = closes && Array.isArray(b.nextStepIds) ? b.nextStepIds.map(String) : [];
+        // The steps this one hands the file to cannot have closed before it: it cannot finish after them
+        if (closes && date) {
+          const handedTo = nextStepIds.length ? nextStepIds : (progress[step.id]?.nn?.nextStepIds || []);
+          const earlier = handedTo.find(id => id !== step.id && progress[id]?.nn?.actualDate && progress[id]!.nn!.actualDate! < date);
+          if (earlier) {
+            const to = steps.find(s => s.id === earlier)?.name || earlier;
+            throw badRequest(`Ngày hoàn thành (${isoToDisplay(date)}) không được sau ngày bước tiếp theo [${to}] đã hoàn thành (${isoToDisplay(progress[earlier]!.nn!.actualDate!)}).`);
+          }
+        }
         const unknown = nextStepIds.find(id => !steps.some(s => s.id === id));
         if (unknown) throw badRequest("Bước tiếp theo không thuộc quy trình của dự án.");
         if (nextStepIds.includes(step.id)) throw badRequest("Bước tiếp theo không được là chính bước đang cập nhật.");

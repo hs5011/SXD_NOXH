@@ -386,9 +386,8 @@ function DashboardContent({
     const list = milestoneListOf(project);
     const activeIdx = activeMilestoneIndex(list, (project as any).currentStepId);
     const active = list[activeIdx];
-    const isDelayed = list.some((m, i) => i <= activeIdx && (
-      milestoneSideStatus(m, 'cdt', i, activeIdx, today) === 'delayed' || milestoneSideStatus(m, 'nn', i, activeIdx, today) === 'delayed'
-    ));
+    // CQNN side only, like "KH của CQNN bị chậm tiến độ" on the Gantt (the investor's lateness shows on its own bar)
+    const isDelayed = list.some((m, i) => i <= activeIdx && milestoneSideStatus(m, 'nn', i, activeIdx, today) === 'delayed');
     const planNnStr = active?.nnPlan && active.nnPlan !== 'X' ? isoToDisplay(active.nnPlan) : '';
     const activePhase = { id: active?.name || '', name: active?.name || '', agency: active?.agency || '' };
     return {
