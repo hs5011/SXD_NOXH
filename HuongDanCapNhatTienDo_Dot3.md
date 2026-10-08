@@ -12,7 +12,7 @@
 | 2 | Chuyển NOXH-HCM-21 sang quy trình p1 | **Có** (1 dự án) |
 | 3 | Chạy thử chuyển dữ liệu, đọc báo cáo | Không |
 | 4 | Tạm dừng app trên server | Không |
-| 5 | Chuyển dữ liệu thật | **Có** (thêm ~760 dòng vào bảng mới, không xóa gì) |
+| 5 | Chuyển dữ liệu thật | **Có** (thêm dòng vào bảng mới, không xóa gì; lần chạy 06/10/2026 ghi 467 dòng) |
 | 6 | Deploy bản build mới, bật lại app | Có (server tự tạo bảng nếu chưa có) |
 | 7 | Kiểm tra sau deploy | Không |
 
@@ -58,7 +58,7 @@ npm run migrate:progress
 ```
 Kết quả mong đợi:
 ```
-Chạy thử xong, không ghi gì. Sẽ ghi 7xx dòng.
+Chạy thử xong, không ghi gì. Sẽ ghi <N> dòng (06/10/2026: 467).
 Mất TT: 0 · Bước hiện tại đổi: 0 · Lệch (giữ theo bước): 0
 ```
 Mở file `summary.md` trong thư mục báo cáo vừa in ra. Phần **1** phải là ✅, phần **2** phải trống (0 dự án). Phần **4** chỉ còn 2 cảnh báo của HCM-40/41 (đã xác nhận để nguyên).
@@ -76,9 +76,9 @@ pm2 stop noxh-app
 
 Ở máy phát triển:
 ```powershell
-npm run migrate:progress -- --apply
+npx tsx scripts/migrate-progress.ts --apply
 ```
-Phải thấy `Đã ghi 7xx dòng vào project_progress.` Script chạy trong 1 transaction: lỗi giữa chừng thì không ghi gì cả.
+Phải thấy `Đã ghi <N> dòng vào project_progress. Dòng đầu phải là `Chế độ: apply`.` Script chạy trong 1 transaction: lỗi giữa chừng thì không ghi gì cả.
 
 Kiểm tra lại ngay (chạy thử lần nữa):
 ```powershell
@@ -105,13 +105,16 @@ Trong log phải có `Successfully connected to PostgreSQL database at 192.168.1
 ### 7.1 Danh sách dự án – cột "Bước hiện tại"
 | Dự án | Bước hiện tại mong đợi |
 |---|---|
-| NOXH-HCM-02 | Thẩm định chủ trương đầu tư |
-| NOXH-HCM-12 | Công bố thông tin |
-| NOXH-HCM-14 | Thẩm định trường hợp giao đất / cho thuê đất cho toàn bộ diện tích đất… |
+| NOXH-HCM-02 | Chấp thuận chủ trương đầu tư |
+| NOXH-HCM-12 | Chấp thuận chủ trương đầu tư |
+| NOXH-HCM-14 | Phê duyệt / có ý kiến địa phương trường hợp dự án có NOXH có bố trí 20% diện tích đất làm nhà ở Thương mại |
 | NOXH-HCM-21 | Thẩm định chủ trương đầu tư (quy trình p1) |
 | NOXH-HCM-40 | Cấp giấy phép xây dựng |
 
 Các dự án khác: bước hiện tại phải **giống hệt trước khi deploy**.
+
+> Cập nhật 08/10/2026: bảng trên theo giá trị đang lưu trong DB thật (đã kiểm tra sau khi chạy migration: "Bước hiện tại đổi: 0").
+> Lưu ý PowerShell: `npm run ... -- --apply` làm mất cờ `--apply` (script chạy ở chế độ chạy thử). Luôn gọi thẳng `npx tsx scripts/migrate-progress.ts --apply`.
 
 ### 7.2 Sơ đồ Gantt (combobox giai đoạn = CHUẨN BỊ ĐẦU TƯ)
 | Dự án | Mốc | Mong đợi |
@@ -140,7 +143,7 @@ Dashboard điều hành · Dashboard TP.HCM · Cập nhật kế hoạch dự á
 
 | Tình huống | Cách xử lý |
 |---|---|
-| Số liệu sau deploy sai, muốn bỏ dữ liệu vừa chuyển | `npm run migrate:progress -- --revert` (xóa các dòng do lần chuyển ghi; dữ liệu cũ vẫn còn nguyên) rồi deploy lại bản cũ |
+| Số liệu sau deploy sai, muốn bỏ dữ liệu vừa chuyển | `npx tsx scripts/migrate-progress.ts --revert` (xóa các dòng do lần chuyển ghi; dữ liệu cũ vẫn còn nguyên) rồi deploy lại bản cũ |
 | Muốn trả HCM-21 về p3 | `npx tsx scripts/fix-hcm21-process.mts --restore _backups/2026-10-06_5_hcm21-quy-trinh/NOXH-HCM-21_truoc-sua.json` |
 | Muốn trả cấu hình mốc p3 về cũ | `npx tsx scripts/fix-p3-milestones.mts --restore _backups/2026-10-06_4_cau-hinh-p3/p3_parent_steps_truoc-sua.json` |
 | Hỏng nặng | Khôi phục file backup ở Bước 1 (pgAdmin → Restore) |
