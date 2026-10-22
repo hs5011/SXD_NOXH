@@ -12,7 +12,7 @@ import { isPlanDatePassed } from '../src/lib/phaseLogic.ts';
 import {
   ProjectStepProgress, MilestoneProgress, ProgressSide,
   applyMilestoneInput, applyMilestonePlan, catalogMilestones, computeMilestones,
-  isoToDisplay, legacyPhaseOf, legacyStepViews, legacyValuesFor, linkedProcedures, orderOpenSteps, processSteps, toIsoDate
+  chosenNextStepIds, isoToDisplay, legacyPhaseOf, legacyStepViews, legacyValuesFor, linkedProcedures, orderOpenSteps, processSteps, toIsoDate
 } from '../src/lib/stepProgress.ts';
 
 export const findProcess = (meta: any, project: any) =>
@@ -84,6 +84,19 @@ export function stepStatusFields(process: any, progress: ProjectStepProgress) {
   };
 }
 
+// Open steps the file is actually at: handed over as "Bước tiếp theo" or being processed. Several when a
+// step was handed to parallel steps (e.g. UBND phường and Sở NNMT); each of their agencies works on it.
+// Steps that only have a plan are left out (a plan alone does not hand the file to an agency).
+export function handlingStepIds(process: any, progress: ProjectStepProgress): string[] {
+  const steps = flattenProcessSteps(process);
+  if (!process || steps.length === 0) return [];
+  const views = legacyStepViews(process, progress);
+  const chosen = chosenNextStepIds(progress);
+  return findActiveSteps(steps, views.milestones, views.implementationPlan)
+    .filter(s => chosen.has(s.id) || !!views.implementationPlan?.[s.id]?.agencyStatus)
+    .map(s => s.id);
+}
+
 export interface ComposedProject {
   project: any;
   milestones: Record<string, MilestoneProgress>;
@@ -125,6 +138,8 @@ export function composeProject(project: any, meta: any, legacyActual: any, rows:
   if (Object.keys(rows || {}).length > 0 || Object.keys(progress).length > 0) {
     const fields = stepStatusFields(process, progress);
     if (fields) Object.assign(composed, fields);
+    // Read by the access rules only (server.ts projectAgencies); never written to the row
+    composed.handlingStepIds = handlingStepIds(process, progress);
   }
   return { project: composed, milestones, legacyActual: derivedActual };
 }

@@ -5,7 +5,7 @@
  *   - Kết thúc một bước mà không chọn bước tiếp theo không đưa dự án về "Khởi tạo hồ sơ"
  */
 import { describe, it, expect } from 'vitest';
-import { normalizeAgencyName, resolveProjectStep, resolveProjectStepAgency, findActiveSteps, flattenProcessSteps } from '../../src/lib/stepAgency';
+import { normalizeAgencyName, resolveProjectStep, resolveProjectStepAgency, findActiveSteps, flattenProcessSteps, handlingSteps, handlingAgencyNames, resolveStepForAgency } from '../../src/lib/stepAgency';
 import { calculateProjectStatus, getStepAgency } from '../../src/lib/projectUtils';
 
 const SAME_NAME = 'Chấp thuận (Trường hợp đất <2ha)';
@@ -154,5 +154,24 @@ describe('normalizeDatesInText – ngày trong nội dung lịch sử cũ', () =
       .toBe('Thay đổi "QH 1/500" từ "25/05/2026" thành "14/07/2026".');
     expect(normalizeDatesInText('Ngày 31/2/26 không có thật')).toBe('Ngày 31/2/26 không có thật');
     expect(normalizeDatesInText('')).toBe('');
+  });
+});
+
+describe('Giao song song (handlingStepIds) - QA 22/10/2026', () => {
+  const par = { id: 'x', processId: 'p5', currentStep: SAME_NAME, currentStepId: 'b1', handlingStepIds: ['b1', 'b2'] };
+
+  it('handlingSteps trả các bước đang giữ hồ sơ khi có từ 2 bước', () => {
+    expect(handlingSteps(par, processes).map(s => s.id)).toEqual(['b1', 'b2']);
+    expect(handlingSteps({ ...par, handlingStepIds: ['b1'] }, processes)).toEqual([]);
+    expect(handlingSteps({ ...par, handlingStepIds: undefined }, processes)).toEqual([]);
+  });
+  it('resolveStepForAgency chọn bước của cơ quan người xem, mặc định bước hiện tại', () => {
+    expect(resolveStepForAgency(par, processes, 'UBND cấp xã, phường')?.id).toBe('b2');
+    expect(resolveStepForAgency(par, processes, 'UBND TP')?.id).toBe('b1');
+    expect(resolveStepForAgency(par, processes, 'Sở Xây dựng (Phòng PTĐT)')?.id).toBe('b1');
+    expect(resolveStepForAgency({ ...par, handlingStepIds: undefined }, processes, 'UBND cấp xã, phường')?.id).toBe('b1');
+  });
+  it('handlingAgencyNames chuẩn hóa tên cơ quan', () => {
+    expect(handlingAgencyNames(par, processes)).toEqual(['UBND TP', 'UBND cấp xã, phường']);
   });
 });

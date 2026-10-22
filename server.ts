@@ -177,10 +177,18 @@ async function startServer() {
   // The current step decides. The active phase (milestone dates / Gantt "TT") is only a fallback for a
   // project whose step cannot be resolved: the two are recorded separately, and marking a milestone done
   // in the Gantt must not hand a project still at an SXD step to SQHKT or the ward.
+  // A file handed to parallel steps is at each of them: `handlingAgencies` lists the agencies of every
+  // step holding it (composeProject.handlingStepIds), not only the first one.
   function projectAgencies(p: any, ctx: AccessContext) {
     const stepAgency = resolveProjectStepAgency(p, ctx.processes);
+    const process = ctx.processes.find((pr: any) => pr && String(pr.id) === String(p?.processId));
+    const steps = process ? processSteps(process) : [];
+    const handlingAgencies = (Array.isArray(p?.handlingStepIds) ? p.handlingStepIds : [])
+      .map((id: any) => baseAgency(steps.find(s => s.id === String(id))?.agency))
+      .filter(Boolean);
     return {
       stepAgency,
+      handlingAgencies,
       activeAgency: stepAgency ? '' : normalizeAgencyName(computeActivePhase(p, ctx.actualProgress[p.id]).activeAgency)
     };
   }
@@ -188,8 +196,8 @@ async function startServer() {
   // Steps a ward (UBND cấp xã, phường) works on: its own and the SQHKT planning step in its ward
   const WARD_WORK_AGENCIES = ['UBND cấp xã, phường', 'Sở Quy hoạch Kiến trúc'];
   function isAtWardStep(p: any, ctx: AccessContext): boolean {
-    const { stepAgency, activeAgency } = projectAgencies(p, ctx);
-    return WARD_WORK_AGENCIES.includes(stepAgency) || WARD_WORK_AGENCIES.includes(activeAgency);
+    const { stepAgency, activeAgency, handlingAgencies } = projectAgencies(p, ctx);
+    return [stepAgency, activeAgency, ...handlingAgencies].some(a => WARD_WORK_AGENCIES.includes(a));
   }
 
   function canViewProject(user: any, p: any, ctx: AccessContext): boolean {
@@ -206,11 +214,12 @@ async function startServer() {
       return isProjectInWard(p.location, user.department || '');
     }
 
-    const { stepAgency, activeAgency } = projectAgencies(p, ctx);
+    const { stepAgency, activeAgency, handlingAgencies } = projectAgencies(p, ctx);
 
-    // Other agencies: projects at their step or in their active phase
+    // Other agencies: projects at their step (any of the parallel ones) or in their active phase
     const userAgencyName = normalizeAgencyName(ctx.agencies.find((a: any) => a.id === user.agencyId)?.name);
-    let isMatch = !!userAgencyName && (stepAgency === userAgencyName || activeAgency === userAgencyName);
+    let isMatch = !!userAgencyName && (stepAgency === userAgencyName || activeAgency === userAgencyName
+      || handlingAgencies.includes(baseAgency(userAgencyName)));
     if (!isMatch) {
       const uLower = userAgencyName.toLowerCase();
       const sAgency = (stepAgency || '').toLowerCase();
@@ -532,6 +541,76 @@ async function startServer() {
     return String(body?.name ?? '').trim() ? null : "Tên dự án không được để trống.";
   }
 
+  // ─── Input limits and references (QA 22/10/2026) ──────────────────────────────────────────────────
+  // Lengths and numeric ranges the forms already respect, now also enforced for direct API calls. On an
+  // update only fields sent with a new value are checked, so legacy rows stay editable.
+  const PROJECT_TEXT_MAX = 500;
+  const PROJECT_CODE_MAX = 100;
+  const PROJECT_NUMBER_RANGES: { key: string; label: string; max: number; int?: boolean }[] = [
+    { key: 'progress', label: 'Tiến độ', max: 100 },
+    { key: 'totalArea', label: 'Diện tích', max: 1e9 },
+    { key: 'totalInvestment', label: 'Tổng mức đầu tư', max: 1e15 },
+    { key: 'height', label: 'Tầng cao / Chiều cao', max: 1000, int: true },
+    { key: 'apartmentCount', label: 'Số lượng căn hộ', max: 1e6, int: true }
+  ];
+  const PROJECT_TEXT_FIELDS = ['name', 'investor', 'location', 'projectGroup', 'projectCategory', 'buildingGrade', 'fundingSource', 'follower'];
+  // Catalog behind a project field: a value must be one of the list (empty stays allowed)
+  const PROJECT_REFERENCES: { key: string; field: string; label: string }[] = [
+    { key: 'investors', field: 'investor', label: 'Chủ đầu tư' },
+    { key: 'projectGroups', field: 'projectGroup', label: 'Nhóm dự án' },
+    { key: 'projectCategories', field: 'projectCategory', label: 'Phân loại dự án' },
+    { key: 'buildingGrades', field: 'buildingGrade', label: 'Cấp công trình' },
+    { key: 'fundingSources', field: 'fundingSource', label: 'Nguồn vốn' }
+  ];
+  async function projectInputError(body: any, existing?: any): Promise<string | null> {
+    if (!body || typeof body !== 'object') return null;
+    const changed = (k: string) => body[k] !== undefined && body[k] !== null
+      && (!existing || String(body[k]).trim() !== String(existing[k] ?? '').trim());
+    if (changed('code') && String(body.code).trim().length > PROJECT_CODE_MAX) return `Mã dự án tối đa ${PROJECT_CODE_MAX} ký tự.`;
+    for (const k of PROJECT_TEXT_FIELDS) {
+      if (changed(k) && String(body[k]).length > PROJECT_TEXT_MAX) return `Trường "${k}" tối đa ${PROJECT_TEXT_MAX} ký tự.`;
+    }
+    for (const f of PROJECT_NUMBER_RANGES) {
+      if (!changed(f.key) || String(body[f.key]).trim() === '') continue;
+      const n = Number(body[f.key]);
+      if (!Number.isFinite(n) || n < 0 || n > f.max) return `${f.label} phải là số từ 0 đến ${f.max}.`;
+      if (f.int && !Number.isInteger(n)) return `${f.label} phải là số nguyên.`;
+    }
+    for (const ref of PROJECT_REFERENCES) {
+      if (!changed(ref.field) || !String(body[ref.field]).trim()) continue;
+      const values = (await dbGetMetadata(ref.key)).map((v: any) => String(v ?? '').trim());
+      if (!values.includes(String(body[ref.field]).trim())) return `${ref.label} "${body[ref.field]}" không có trong danh mục.`;
+    }
+    if (changed('processId') && String(body.processId).trim()) {
+      const processes = await dbGetMetadata('processes');
+      if (!processes.some((p: any) => String(p?.id) === String(body.processId).trim())) return `Quy trình "${body.processId}" không tồn tại.`;
+    }
+    return null;
+  }
+
+  // PUT /api/metadata/:key: the key must be an existing catalog and the body a list of valid items
+  // (a body of another shape used to be coerced or stored as it came)
+  const CATALOG_TEXT_ITEM_MAX = 200;
+  const SIMPLE_CATALOG_KEYS = ['investors', 'projectGroups', 'projectCategories', 'buildingGrades', 'projectStatuses', 'fundingSources', 'stepStatuses', 'roles'];
+  async function metadataBodyError(key: string, body: any): Promise<[number, string] | null> {
+    const known = Object.keys(await dbGetAllMetadata()).filter(k => k !== 'users');
+    if (!known.includes(key)) return [404, `Danh mục "${key}" không tồn tại.`];
+    if (!Array.isArray(body)) return [400, "Dữ liệu danh mục phải là một danh sách."];
+    const isObject = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
+    const text = (v: any) => typeof v === 'string' && v.trim().length > 0 && v.length <= CATALOG_TEXT_ITEM_MAX;
+    for (const item of body) {
+      let valid: boolean;
+      if (SIMPLE_CATALOG_KEYS.includes(key)) valid = text(item);
+      else if (key === 'processingAgencies') valid = isObject(item) && text(item.name) && item.id !== undefined && item.id !== null && String(item.id).length > 0;
+      else if (key === 'locations') valid = isObject(item) && text(item.ward);
+      else if (key === 'processes') valid = isObject(item) && text(item.name) && String(item.id ?? '').length > 0 && Array.isArray(item.parentSteps);
+      else if (key === 'projectStages') valid = isObject(item) && text(item.name);
+      else valid = true;
+      if (!valid) return [400, `Một mục trong danh mục "${key}" không hợp lệ (cần giá trị không rỗng, tối đa ${CATALOG_TEXT_ITEM_MAX} ký tự).`];
+    }
+    return null;
+  }
+
   // General information only Sở Xây dựng / Admin may change. Other editors (investor, agency or ward at
   // its step) update progress, plan and scale; changing these would move the project to another
   // investor/ward/process or rename it.
@@ -548,6 +627,8 @@ async function startServer() {
     { key: 'isKeyProject', label: 'Dự án trọng điểm' },
     { key: 'isPublicInvestment', label: 'Dự án đầu tư công' }
   ];
+  // Computed from the step progress (stepStatusFields); only SXD / Admin may still send them by hand
+  const DERIVED_PROJECT_FIELDS = ['status', 'progress', 'currentStep', 'currentStepId', 'childStep', 'parentStep', 'currentAgency', 'stage'];
   function sameProjectValue(a: any, b: any): boolean {
     if (typeof a === 'boolean' || typeof b === 'boolean') return !!a === !!b;
     return String(a ?? '').trim() === String(b ?? '').trim();
@@ -564,8 +645,16 @@ async function startServer() {
   // goes to that step; a milestone plan (former columns *_cdt_date / *_nn_date, "Chỉnh sửa mốc") goes to
   // the first step (CĐT) or the step with the latest CQNN plan, unless steps of that milestone were
   // edited in the same request (the step level then wins)
-  async function applyPlanChanges(raw: any, body: any, u: any) {
+  // Who sets a plan: SXD / Admin everything; otherwise a step plan only on the side that account records
+  // for that step (canWriteStepSide: CĐT side → the owner investor, CQNN side → the step's agency), and a
+  // milestone-level plan (procedure row, former *_cdt_date / *_nn_date columns) only SXD / Admin, like
+  // milestonePlans. A refused change throws 403 before anything is saved.
+  async function applyPlanChanges(raw: any, body: any, u: any, composedProject?: any, accessCtx?: AccessContext) {
     const state = await loadProgressState();
+    const sxd = isSxdOrAdminUser(u);
+    const ctx = accessCtx || buildAccessContext(state.meta, state.derivedActual);
+    const accessProject = composedProject || raw;
+    const milestonePlanRefused = () => forbidden("Chỉ Sở Xây dựng được cập nhật kế hoạch mốc của dự án.");
     const meta = state.meta;
     const current = state.composed.find(c => String(c.raw.id) === String(raw.id));
     const process = findProcess(meta, raw);
@@ -589,6 +678,11 @@ async function startServer() {
         if (value === undefined) return;
         const iso = toIsoDate(value);
         if (iso === (before[step.id]?.[side]?.planDate || '')) return;
+        if (!sxd && !canWriteStepSide(u, accessProject, step, side, ctx)) {
+          throw forbidden(side === 'cdt'
+            ? `Chỉ chủ đầu tư của dự án (hoặc Sở Xây dựng) được cập nhật kế hoạch của chủ đầu tư ở bước "${step.name}".`
+            : `Chỉ ${step.agency || 'cơ quan xử lý'} (hoặc Sở Xây dựng) được cập nhật kế hoạch bước "${step.name}".`);
+        }
         const ms = milestoneOfStep(process, meta.projectStages, step.id);
         if (ms) { materialize(ms); editedAtStepLevel.add(ms); }
         next = applyStepPlan(next, step.id, side, iso, user);
@@ -608,6 +702,11 @@ async function startServer() {
         const key = side === 'cdt' ? 'investor' : 'agency';
         const iso = toIsoDate(sent[key]);
         if (!iso || iso === toIsoDate(stored[key])) return;
+        if (!sxd) {
+          // The screen sends back the plan it showed (computed from the steps): unchanged, not a new plan
+          if (iso === toIsoDate(accessProject.milestones?.[ps.id]?.[key])) return;
+          throw milestonePlanRefused();
+        }
         materialize(m.name);
         next = applyMilestonePlan(process, next, m.name, side, iso, user);
         editedAtStepLevel.add(m.name);
@@ -644,6 +743,7 @@ async function startServer() {
         const iso = toIsoDate(sent);
         const shown = (current?.milestones[m.name] as any)?.[side === 'cdt' ? 'cdtPlan' : 'nnPlan'] || '';
         if (iso === shown || (!iso && (shown === '' || shown === 'X'))) return;
+        if (!sxd) throw milestonePlanRefused();
         materialize(m.name);
         next = applyMilestonePlan(process, next, m.name, side, iso, user);
       });
@@ -934,7 +1034,7 @@ async function startServer() {
       if (spanError) {
         return res.status(400).json({ error: spanError });
       }
-      const fieldError = projectNameError(req.body, true) || projectDateError(req.body);
+      const fieldError = projectNameError(req.body, true) || projectDateError(req.body) || await projectInputError(req.body);
       if (fieldError) {
         return res.status(400).json({ error: fieldError });
       }
@@ -955,21 +1055,28 @@ async function startServer() {
         return res.status(404).json({ error: "Không tìm thấy dự án." });
       }
 
-      // Same scope as viewing it (canEditProject): owner investor, or the agency/ward at its step
+      // Same scope as viewing it (canEditProject): owner investor, or the agency/ward at its step: the
+      // step stored on the row (set by SXD or the server only) or, from the step progress, any of the
+      // parallel steps the file was handed to
       const u = (req as any).user;
-      if (!canEditProject(u, project, await loadAccessContext())) {
+      const state = await loadProgressState();
+      const accessCtx = buildAccessContext(state.meta, state.derivedActual);
+      const composedProject = state.composed.find(c => String(c.project.id) === String(project.id))?.project || project;
+      if (!canEditProject(u, project, accessCtx) && !canEditProject(u, composedProject, accessCtx)) {
         return res.status(403).json({ error: "Bạn không có quyền cập nhật dự án này (ngoài địa bàn hoặc ngoài bước phân công)." });
       }
 
-      let body = req.body || {};
+      let body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? { ...req.body } : {};
+      delete body.handlingStepIds; // computed on reading, never stored
       if (!isSxdOrAdminUser(u)) {
         const changed = SXD_ONLY_PROJECT_FIELDS.filter(f => body[f.key] !== undefined && !sameProjectValue(body[f.key], project[f.key]));
         if (changed.length > 0) {
           return res.status(403).json({ error: `Chỉ Sở Xây dựng mới được thay đổi: ${changed.map(f => f.label).join(', ')}.` });
         }
-        // Omitted fields keep the stored value (dbUpdateProject writes every column)
-        body = { ...body };
         SXD_ONLY_PROJECT_FIELDS.forEach(f => { body[f.key] = project[f.key]; });
+        // Current step / status / percentage follow the step progress: an editor other than SXD cannot
+        // set them by hand (e.g. an investor marking its own project "Hoàn thành")
+        DERIVED_PROJECT_FIELDS.forEach(key => { body[key] = project[key]; });
       }
 
       // A body without `code` keeps the stored code (dbUpdateProject writes every column)
@@ -989,7 +1096,7 @@ async function startServer() {
             if (spanError) {
         return res.status(400).json({ error: spanError });
       }
-      const fieldError = projectNameError(body, false) || projectDateError(body, project);
+      const fieldError = projectNameError(body, false) || projectDateError(body, project) || await projectInputError(body, project);
       if (fieldError) {
         return res.status(400).json({ error: fieldError });
       }
@@ -1002,7 +1109,7 @@ async function startServer() {
 
       // Plans go to the step progress; the former plan / progress fields of the row keep their stored
       // value (they are only read where no step holds data yet) and the step fields come from the server
-      const { process, progress } = await applyPlanChanges(project, updateBody, u);
+      const { process, progress } = await applyPlanChanges(project, updateBody, u, composedProject, accessCtx);
       delete updateBody.milestonePlans; // applied to the steps above
       updateBody.milestones = project.milestones || {};
       updateBody.implementationPlan = project.implementationPlan || project.extra?.implementationPlan || {};
@@ -1015,7 +1122,8 @@ async function startServer() {
       });
       // A project with no step data at all keeps the step it was given (same rule as composeProject)
       const statusFields = Object.keys(progress).length > 0 ? stepStatusFields(process, progress) : null;
-      const updated = await dbUpdateProject(req.params.id, { ...updateBody, ...(statusFields || {}), code: String(nextCode).trim() });
+      // Fields the request leaves out keep their stored value (dbUpdateProject writes every column)
+      const updated = await dbUpdateProject(req.params.id, { ...project, ...updateBody, ...(statusFields || {}), code: String(nextCode).trim() });
       res.json(updated);
     } catch (err: any) {
       sendError(res, err);
@@ -1051,6 +1159,7 @@ async function startServer() {
   // The former public /uploads route exposed every file to anyone who knew its name, and put the
   // original (Vietnamese) file name in the URL, which IIS / HTTP.sys rejected with "400 Invalid URL".
 
+  const ATTACHMENT_NAME_MAX = 200;
   app.post("/api/projects/:id/attachments/upload", upload.single("file"), async (req, res) => {
     try {
             if (!req.file) {
@@ -1067,9 +1176,20 @@ async function startServer() {
       const projectId = req.params.id;
       const originalName = req.file.originalname;
       const sizeInBytes = req.file.size;
-      const sizeStr = sizeInBytes > 1024 * 1024 
-        ? `${(sizeInBytes / (1024 * 1024)).toFixed(1)} MB` 
-        : `${(sizeInBytes / 1024).toFixed(0)} KB`;
+      const removeTemp = () => { if (req.file && fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch (_) {} } };
+      // Refused before anything is saved: a name the file system cannot hold used to fail after the
+      // record was created, leaving a record whose file could never be downloaded
+      if (originalName.length > ATTACHMENT_NAME_MAX) {
+        removeTemp();
+        return res.status(400).json({ error: `Tên tệp quá dài (tối đa ${ATTACHMENT_NAME_MAX} ký tự).` });
+      }
+      if (!originalName.includes('.') || originalName.endsWith('.')) {
+        removeTemp();
+        return res.status(400).json({ error: `Tệp "${originalName}" không có phần mở rộng (ví dụ .pdf).` });
+      }
+      const sizeStr = sizeInBytes > 1024 * 1024
+        ? `${(sizeInBytes / (1024 * 1024)).toFixed(1)} MB`
+        : sizeInBytes >= 1024 ? `${(sizeInBytes / 1024).toFixed(0)} KB` : `${sizeInBytes} B`;
       const extension = originalName.split('.').pop()?.toUpperCase() || "FILE";
 
       // Fetch and validate against config
@@ -1101,7 +1221,13 @@ async function startServer() {
       const tempPath = req.file.path;
       const finalPath = attachmentFilePath(doc.id, originalName);
 
-      fs.renameSync(tempPath, finalPath);
+      try {
+        fs.renameSync(tempPath, finalPath);
+      } catch (renameErr) {
+        // No file behind the record: take the record back so the list never shows an unusable file
+        try { await dbDeleteAttachment(doc.id); } catch (_) {}
+        throw renameErr;
+      }
 
       res.json(doc);
     } catch (err: any) {
@@ -1181,10 +1307,18 @@ async function startServer() {
     }
   });
 
+  const HISTORY_DESCRIPTION_MAX = 5000;
   app.post("/api/projects/:id/history", async (req, res) => {
     try {
       if (!(await requireProjectAccess(req, res, req.params.id, 'edit'))) return;
-      const { actionType, description, oldStatus, newStatus } = req.body;
+      const { actionType, description, oldStatus, newStatus } = req.body || {};
+      const isText = (v: any, max: number) => typeof v === 'string' && v.length <= max;
+      if (typeof description !== 'string' || !description.trim() || description.length > HISTORY_DESCRIPTION_MAX) {
+        return res.status(400).json({ error: `Nội dung lịch sử bắt buộc, tối đa ${HISTORY_DESCRIPTION_MAX} ký tự.` });
+      }
+      if (!isText(actionType ?? '', 50) || !isText(oldStatus ?? '', 100) || !isText(newStatus ?? '', 100)) {
+        return res.status(400).json({ error: "Loại thao tác hoặc trạng thái không hợp lệ." });
+      }
       // The author is the signed-in account, never a name supplied by the client
       const u = (req as any).user;
       const userName = u?.fullName || u?.username || 'Người dùng hệ thống';
@@ -1214,6 +1348,8 @@ async function startServer() {
   // milestone change, written onto the steps like "+ nhập TT"
   app.put("/api/actual-progress/:projectId", async (req, res) => {
     try {
+      // Scope first: even a request that changes nothing answers with the project's progress
+      if (!await requireProjectAccess(req, res, req.params.projectId, 'view')) return;
       const { meta, composed } = await loadProgressState();
       const entry = composed.find(c => String(c.project.id) === String(req.params.projectId));
       if (!entry) return res.status(404).json({ error: "Không tìm thấy dự án." });
@@ -1568,6 +1704,10 @@ async function startServer() {
       if (req.params.key === "users") {
         return res.status(400).json({ error: "Không hỗ trợ cập nhật danh sách người dùng qua metadata. Vui lòng dùng /api/users." });
       }
+      const bodyError = await metadataBodyError(req.params.key, req.body);
+      if (bodyError) {
+        return res.status(bodyError[0]).json({ error: bodyError[1] });
+      }
       if (Array.isArray(req.body)) {
         const duplicate = duplicateCatalogValue(req.body);
         if (duplicate) {
@@ -1595,11 +1735,18 @@ async function startServer() {
     const has = (k: string) => !existing || changed(k);
     const text = (k: string) => String(body?.[k] ?? '').trim();
     if (has('fullName') && !text('fullName')) return "Họ và tên không được để trống.";
+    if (has('fullName') && text('fullName').length > 200) return "Họ và tên tối đa 200 ký tự.";
     if (has('username') && !text('username')) return "Tên đăng nhập không được để trống.";
+    // Login trims what is typed: a stored name with spaces around or inside could never be used
+    if (has('username') && (text('username').length > 50 || /\s/.test(text('username')))) return "Tên đăng nhập tối đa 50 ký tự và không chứa khoảng trắng.";
     if (has('email') && !EMAIL_RE.test(text('email'))) return "Email không hợp lệ.";
+    if (has('email') && text('email').length > 254) return "Email tối đa 254 ký tự.";
     if (has('phone') && text('phone') && !PHONE_RE.test(text('phone'))) return "Số điện thoại không hợp lệ (10-12 chữ số).";
+    if (changed('avatar') && !/^(https?:\/\/|data:image\/|\/)/i.test(text('avatar')) && text('avatar')) return "Ảnh đại diện không hợp lệ.";
     if (!existing || changed('roleId')) {
       if (!text('roleId')) return "Vui lòng chọn vai trò cho tài khoản.";
+      const roles = (await dbGetMetadata('roles')).map((r: any) => String(r?.name ?? r?.id ?? r));
+      if (!roles.includes(text('roleId'))) return `Vai trò "${text('roleId')}" không có trong danh mục vai trò.`;
     }
     const merged = { ...(existing || {}), ...(body || {}) };
     const typeChanged = !existing || ['userType', 'agencyId', 'investorId', 'department'].some(changed);
@@ -1613,8 +1760,37 @@ async function startServer() {
         }
       } else if (!String(merged.investorId ?? '').trim()) {
         return "Vui lòng chọn Chủ đầu tư cho tài khoản này.";
+      } else {
+        const investors = (await dbGetMetadata('investors')).map((v: any) => String(v ?? '').trim());
+        if (!investors.includes(String(merged.investorId).trim())) return "Chủ đầu tư của tài khoản không có trong danh mục.";
       }
     }
+    return null;
+  }
+
+  // Account fields a client may set; anything else in the body (e.g. mustChangePassword, extra keys) is dropped
+  const USER_FIELDS = ['email', 'password', 'fullName', 'phone', 'roleId', 'userType', 'agencyId', 'investorId', 'avatar', 'username', 'isFollower', 'department'];
+  function pickUserFields(body: any): any {
+    const out: any = {};
+    USER_FIELDS.forEach(k => {
+      const v = body?.[k];
+      if (v === undefined) return;
+      if (k === 'isFollower') out[k] = v === true || v === 'true';
+      else if (k === 'username' || k === 'email') out[k] = String(v ?? '').trim();
+      else out[k] = v;
+    });
+    return out;
+  }
+  const PASSWORD_MAX_LENGTH = 128;
+  async function passwordPolicyError(password: any): Promise<string | null> {
+    if (typeof password !== 'string') return "Mật khẩu không hợp lệ.";
+    if (password.length > PASSWORD_MAX_LENGTH) return `Mật khẩu tối đa ${PASSWORD_MAX_LENGTH} ký tự.`;
+    const policy = await dbGetPasswordPolicy();
+    if (password.length < (policy.minLength || 6)) return `Mật khẩu phải có ít nhất ${policy.minLength || 6} ký tự.`;
+    if (policy.requireUppercase && !/[A-Z]/.test(password)) return "Mật khẩu phải chứa ít nhất một chữ cái in hoa (A-Z).";
+    if (policy.requireLowercase && !/[a-z]/.test(password)) return "Mật khẩu phải chứa ít nhất một chữ cái thường (a-z).";
+    if (policy.requireNumbers && !/[0-9]/.test(password)) return "Mật khẩu phải chứa ít nhất một chữ số (0-9).";
+    if (policy.requireSpecialChars && !/[!@#$%&*]/.test(password)) return "Mật khẩu phải chứa ít nhất một ký tự đặc biệt (ví dụ: ! @ # $ % & *).";
     return null;
   }
 
@@ -1643,11 +1819,12 @@ async function startServer() {
             if (isAdminUser(req.body) && !isAdminUser(u)) {
         return res.status(403).json({ error: "Chỉ Quản trị viên (Admin) mới được tạo tài khoản Admin." });
       }
-      const accountError = await accountFieldsError(req.body);
+      const newUser = pickUserFields(req.body);
+      const accountError = await accountFieldsError(newUser)
+        || (newUser.password !== undefined && newUser.password !== '' ? await passwordPolicyError(newUser.password) : null);
       if (accountError) {
         return res.status(400).json({ error: accountError });
       }
-      const { id: _clientId, ...newUser } = req.body;
       const user = await dbCreateUser(newUser);
       const { password, ...cleanUser } = user;
       res.json(cleanUser);
@@ -1676,7 +1853,8 @@ async function startServer() {
       const profileError = await accountFieldsError(
         { fullName: req.body.fullName === undefined ? undefined : payload.fullName,
           email: req.body.email === undefined ? undefined : payload.email,
-          phone: req.body.phone === undefined ? undefined : payload.phone },
+          phone: req.body.phone === undefined ? undefined : payload.phone,
+          avatar: req.body.avatar === undefined ? undefined : payload.avatar },
         targetUser
       );
       if (profileError) {
@@ -1738,10 +1916,14 @@ async function startServer() {
             return res.status(403).json({ error: "Chỉ Quản trị viên (Admin) mới được cấp quyền Admin." });
           }
         }
-                payload = { ...req.body };
+        payload = pickUserFields(req.body);
         delete payload.password;
-        delete payload.id;
-        delete payload.mustChangePassword;
+        // An SXD account cannot move itself to another agency / type (it would lose its own access);
+        // an Admin can change anything
+        if (isSelf && !isAdminUser(u)) {
+          const moved = ['agencyId', 'userType', 'roleId'].some(k => payload[k] !== undefined && String(payload[k] ?? '') !== String(targetUser[k] ?? ''));
+          if (moved) return res.status(400).json({ error: "Không thể tự đổi cơ quan, loại tài khoản hoặc vai trò của chính mình." });
+        }
       }
 
       const accountError = await accountFieldsError(payload, targetUser);
@@ -2014,7 +2196,11 @@ async function startServer() {
         return res.status(403).json({ error: "Chỉ Quản trị viên (Admin) mới được thực hiện thao tác PM2." });
       }
 
-      const { action = "restart", processName = "noxh-app", port = "3000" } = req.body;
+      // The action must be named: a body without it used to restart the application
+      if (!['restart', 'start', 'stop', 'reload'].includes(String(req.body?.action ?? ''))) {
+        return res.status(400).json({ error: "Thiếu hoặc sai thao tác PM2 (restart, start, stop, reload)." });
+      }
+      const { action, processName = "noxh-app", port = "3000" } = req.body;
       const safeProcessName = String(processName || "noxh-app").trim();
       const safePort = String(port || "3000").trim();
       if (!PM2_NAME_RE.test(safeProcessName)) {
@@ -2218,6 +2404,9 @@ async function startServer() {
       // 2. Validate new password against policy
       const policy = await dbGetPasswordPolicy();
       const minLength = policy.minLength || 6;
+      if (newPassword.length > PASSWORD_MAX_LENGTH) {
+        return res.status(400).json({ error: `Mật khẩu mới tối đa ${PASSWORD_MAX_LENGTH} ký tự.` });
+      }
       if (newPassword.length < minLength) {
         return res.status(400).json({ error: `Mật khẩu mới phải có ít nhất ${minLength} ký tự.` });
       }

@@ -30,7 +30,7 @@ import { Search, User, Menu, Settings, LogOut, RefreshCw, Database, AlertTriangl
 
 import { apiFetch, uploadProjectFile, describeUploadFailures } from './utils/apiFetch';
 import { isProjectInWard } from './lib/wardMatch';
-import { normalizeAgencyName, resolveProjectStepAgency } from './lib/stepAgency';
+import { handlingAgencyNames, normalizeAgencyName, resolveProjectStepAgency } from './lib/stepAgency';
 import type { MilestoneProgress } from './lib/stepProgress';
 
 const getDefaultMilestoneName = (parentName: string, parentShortName?: string): string | undefined => {
@@ -1092,7 +1092,7 @@ export default function App() {
       // Current step decides; the active phase only when the step is unknown (same rule as server.ts)
       const stepAgency = resolveProjectStepAgency(p, processes);
       const activeAgency = stepAgency ? '' : normalizeAgencyName(getActiveAgencyForProject(p));
-      return WARD_WORK_AGENCIES.includes(stepAgency) || WARD_WORK_AGENCIES.includes(activeAgency);
+      return [stepAgency, activeAgency, ...handlingAgencyNames(p, processes)].some(a => WARD_WORK_AGENCIES.includes(a));
     }
     return true;
   };
@@ -1133,7 +1133,8 @@ export default function App() {
           return isProjectInWard(p.location || '', currentUser.department || '');
         }
 
-        let isMatch = stepAgency === userAgencyName || activeAgency === userAgencyName;
+        let isMatch = stepAgency === userAgencyName || activeAgency === userAgencyName
+          || handlingAgencyNames(p, processes).includes(userAgencyName);
 
         if (!isMatch && (userAgencyName || currentUser.agencyId)) {
           const uLower = userAgencyName.toLowerCase();

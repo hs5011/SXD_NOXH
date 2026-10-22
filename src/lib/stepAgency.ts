@@ -107,6 +107,34 @@ export const resolveProjectStep = (project: any, processes: any[] | undefined | 
   return null;
 };
 
+// Steps the file is at when it was handed to several steps at once ("Bước tiếp theo" with 2+ steps):
+// project.handlingStepIds is set by the server (server/progressService.handlingStepIds). Empty when the
+// project has no parallel hand-off.
+export const handlingSteps = (project: any, processes: any[] | undefined | null): FlatStep[] => {
+  const ids: string[] = Array.isArray(project?.handlingStepIds) ? project.handlingStepIds.map(String) : [];
+  if (ids.length < 2 || !Array.isArray(processes)) return [];
+  const proc = processes.find(p => p && p.id === project.processId);
+  if (!proc) return [];
+  const steps = flattenProcessSteps(proc);
+  return ids.map(id => steps.find(s => s.id === id)).filter((s): s is FlatStep => !!s);
+};
+
+// The step an account works on: with parallel steps, the one handled by its agency (name without the
+// bracketed department), else the project's current step
+export const resolveStepForAgency = (project: any, processes: any[] | undefined | null, agencyName: string): FlatStep | null => {
+  const own = normalizeAgencyName(agencyName);
+  const base = (name: string) => normalizeAgencyName(String(name ?? '').replace(/\s*\(.*\)\s*$/, ''));
+  if (own) {
+    const mine = handlingSteps(project, processes).find(s => base(s.agency) === own);
+    if (mine) return mine;
+  }
+  return resolveProjectStep(project, processes);
+};
+
+// Agencies (normalized, without department) of every step the file is at, parallel ones included
+export const handlingAgencyNames = (project: any, processes: any[] | undefined | null): string[] =>
+  handlingSteps(project, processes).map(s => normalizeAgencyName(String(s.agency ?? '').replace(/\s*\(.*\)\s*$/, ''))).filter(Boolean);
+
 // Agency (normalized) handling the project's current step; '' when unknown or ambiguous
 export const resolveProjectStepAgency = (project: any, processes: any[] | undefined | null): string =>
   normalizeAgencyName(resolveProjectStep(project, processes)?.agency);

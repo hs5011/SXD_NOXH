@@ -15,6 +15,7 @@ import { getAgencyWithDepartment, formatDate, formatShortDate, isDateOverdue } f
 import { isProjectOverdue } from '../lib/phaseLogic';
 import { matchesSearch as textMatches, normalizeSearchText } from '../lib/textSearch';
 import { csvRow } from '../lib/csv';
+import { resolveStepForAgency } from '../lib/stepAgency';
 import { UserAccount } from '../types';
 
 
@@ -266,8 +267,17 @@ export default function ProjectList({
       });
     });
 
+    // Priority 0: the step by id inside the project's own process (step names repeat across agencies);
+    // for a file handed to parallel steps, the one handled by the viewer's agency
+    const viewerAgency = currentUser?.userType === 'agency'
+      ? (processingAgencies.find(a => a.id === currentUser.agencyId)?.name || '')
+      : '';
+    const resolved = resolveStepForAgency(p, processes, viewerAgency);
+    const resolvedStep = resolved && allSteps.find(s => s.id === resolved.id);
+    if (resolvedStep) return [resolvedStep];
+
     // Priority 1: Match the currentStep name or childStep name from project data
-    const currentStepInProcess = allSteps.find(s => 
+    const currentStepInProcess = allSteps.find(s =>
       s.name === p.currentStep || s.name === p.childStep
     );
     if (currentStepInProcess) {
