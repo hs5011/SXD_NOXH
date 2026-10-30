@@ -223,9 +223,10 @@ pm2 save
 Invoke-WebRequest -Uri "http://localhost:3000/api/health" | Select-Object -ExpandProperty Content
 # Kết quả mong đợi: {"status":"ok"}
 
-# Kiểm tra kết nối database
-Invoke-WebRequest -Uri "http://localhost:3000/api/db-status" | Select-Object -ExpandProperty Content
-# Kết quả mong đợi: {"connected":true,...}
+# Kiểm tra kết nối database (/api/db-status chỉ dành cho Admin đã đăng nhập; không còn mở công khai)
+$login = Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/login" -ContentType "application/json" -Body (@{ username = "admin"; password = "<mật khẩu admin>" } | ConvertTo-Json)
+Invoke-RestMethod -Uri "http://localhost:3000/api/db-status" -Headers @{ Authorization = "Bearer $($login.token)" } | ConvertTo-Json
+# Kết quả mong đợi: "connected": true ... (gọi không có token sẽ trả 401)
 
 # Kiểm tra trang web (giao diện React)
 Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing | Select-Object -ExpandProperty StatusCode
