@@ -20,7 +20,7 @@ import { UserAccount } from '../types';
 
 
 // sessionStorage key for the remembered search / filters / page of the project list
-const LIST_VIEW_KEY = 'noxh.projectList.view';
+export const LIST_VIEW_KEY = 'noxh.projectList.view';
 
 interface ProjectListProps {
   projects?: any[];

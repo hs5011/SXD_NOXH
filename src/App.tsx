@@ -4,7 +4,7 @@ import DashboardView from './components/Dashboard';
 import DashboardApp from './components/DashboardApp';
 import DashboardTPHCM from './components/DashboardTPHCM';
 import TPHCMProjectList from './components/TPHCMProjectList';
-import ProjectList from './components/ProjectList';
+import ProjectList, { LIST_VIEW_KEY } from './components/ProjectList';
 import CreateProject from './components/CreateProject';
 import ProjectDetail from './components/ProjectDetail';
 import ProcessGanttView from './components/ProcessGanttView';
@@ -731,8 +731,13 @@ export default function App() {
   // Initial load effect to get all synchronized PostgreSQL data
   React.useEffect(() => {
     loadSystemData();
-    fetchDbStatus();
   }, []);
+
+  // The DB status endpoint is Admin-only; asking for it with no / a non-admin session would be refused
+  React.useEffect(() => {
+    if (currentUser?.roleId === 'Admin') fetchDbStatus();
+    else setDbStatus(null);
+  }, [currentUser?.id, currentUser?.roleId]);
 
   // Toast text that matches what the user did on a catalog (add / delete / rename)
   const catalogSavedMessage = (label: string, prevList: any[], nextList: any[]) =>
@@ -1483,6 +1488,8 @@ export default function App() {
     localStorage.removeItem('auth_token');
     localStorage.removeItem('current_user');
     localStorage.removeItem('cached_system_data');
+    // The project list remembers its search/filters per tab: the next account must not inherit them
+    try { sessionStorage.removeItem(LIST_VIEW_KEY); } catch { /* storage unavailable */ }
     localStorage.removeItem('unsynced_actual_progress');
     localStorage.removeItem('unsynced_offline_actions');
     setUnsyncedProgress({});
@@ -1525,6 +1532,8 @@ export default function App() {
     setAuthNotice(null);
     // Clear any guest session modifications to protect PostgreSQL from mock push
     localStorage.removeItem('cached_system_data');
+    // The project list remembers its search/filters per tab: the next account must not inherit them
+    try { sessionStorage.removeItem(LIST_VIEW_KEY); } catch { /* storage unavailable */ }
     localStorage.removeItem('unsynced_actual_progress');
     localStorage.removeItem('unsynced_offline_actions');
     setUnsyncedProgress({});

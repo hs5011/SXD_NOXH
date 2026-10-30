@@ -214,7 +214,11 @@ test.describe('Trạng thái kết nối DB', () => {
   });
 
   test('API /api/db-status trả về đúng cấu trúc', async ({ page }) => {
-    const response = await page.request.get('/api/db-status');
+    // db-status is Admin-only now: send the signed-in token (page.request does not reuse localStorage)
+    const token = await page.evaluate(() => localStorage.getItem('auth_token'));
+    const anonymous = await page.request.get('/api/db-status');
+    expect(anonymous.status()).toBe(401);
+    const response = await page.request.get('/api/db-status', { headers: { Authorization: `Bearer ${token}` } });
     expect(response.status()).toBe(200);
     const body = await response.json();
     expect(body).toHaveProperty('connected');

@@ -284,7 +284,6 @@ async function startServer() {
     const fullPath = req.baseUrl + req.path;
     const publicPaths = [
       "/api/health",
-      "/api/db-status",
       "/api/login"
     ];
 
@@ -358,7 +357,11 @@ async function startServer() {
   });
 
   // DB Status endpoint
+  // Exposes the database host/user: signed-in Admin only (never public)
   app.get("/api/db-status", async (req, res) => {
+    if (!isAdminUser((req as any).user)) {
+      return res.status(403).json({ error: "Chỉ Quản trị viên (Admin) mới được xem trạng thái cơ sở dữ liệu." });
+    }
     const force = req.query.retry === "true" || req.query.force === "true";
     await initDatabase(force);
     res.json(getDbStatus());
@@ -1261,7 +1264,18 @@ async function startServer() {
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: `Tệp "${repairUploadedName(originalName)}" không còn trên máy chủ (dữ liệu mẫu hoặc tệp đã bị xóa). Vui lòng tải lên lại.` });
       }
-      return res.download(filePath, repairUploadedName(originalName));
+      // Express' own Content-Disposition writes a mangled fallback for accented names: send an ASCII
+      // fallback plus the full UTF-8 name (filename*), which every current browser prefers
+      const downloadName = repairUploadedName(originalName);
+      const asciiName = downloadName
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+        .replace(/[^\x20-\x7e]/g, '_').replace(/["\\%]/g, '_');
+      const encodedName = encodeURIComponent(downloadName).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+      res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`);
+      return res.sendFile(path.resolve(filePath), (err: any) => {
+        if (err && !res.headersSent) sendError(res, err);
+      });
     } catch (err: any) {
       console.error("Error downloading attachment:", err);
       sendError(res, err);
